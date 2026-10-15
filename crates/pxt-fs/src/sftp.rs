@@ -58,6 +58,9 @@ fn entry_from(name: String, path: String, meta: &Metadata, target: Option<&Metad
 }
 
 impl RemoteFs for SftpFs {
+    type Reader = russh_sftp::client::fs::File;
+    type Writer = russh_sftp::client::fs::File;
+
     async fn list(&self, path: &str) -> Result<Vec<Entry>> {
         let dir = self
             .session
@@ -92,6 +95,72 @@ impl RemoteFs for SftpFs {
     async fn canonicalize(&self, path: &str) -> Result<String> {
         self.session
             .canonicalize(path)
+            .await
+            .map_err(|e| FsError::from_sftp(e, path))
+    }
+
+    async fn mkdir(&self, path: &str) -> Result<()> {
+        self.session
+            .create_dir(path)
+            .await
+            .map_err(|e| FsError::from_sftp(e, path))
+    }
+
+    async fn remove_file(&self, path: &str) -> Result<()> {
+        self.session
+            .remove_file(path)
+            .await
+            .map_err(|e| FsError::from_sftp(e, path))
+    }
+
+    async fn remove_dir(&self, path: &str) -> Result<()> {
+        self.session
+            .remove_dir(path)
+            .await
+            .map_err(|e| FsError::from_sftp(e, path))
+    }
+
+    async fn rename(&self, from: &str, to: &str) -> Result<()> {
+        self.session
+            .rename(from, to)
+            .await
+            .map_err(|e| FsError::from_sftp(e, from))
+    }
+
+    async fn set_permissions(&self, path: &str, mode: u32) -> Result<()> {
+        let attrs = Metadata {
+            permissions: Some(mode & 0o7777),
+            ..Metadata::default()
+        };
+        self.session
+            .set_metadata(path, attrs)
+            .await
+            .map_err(|e| FsError::from_sftp(e, path))
+    }
+
+    async fn set_modified(&self, path: &str, secs: i64) -> Result<()> {
+        let t = u32::try_from(secs.max(0)).unwrap_or(u32::MAX);
+        let attrs = Metadata {
+            atime: Some(t),
+            mtime: Some(t),
+            ..Metadata::default()
+        };
+        self.session
+            .set_metadata(path, attrs)
+            .await
+            .map_err(|e| FsError::from_sftp(e, path))
+    }
+
+    async fn open_read(&self, path: &str) -> Result<Self::Reader> {
+        self.session
+            .open(path)
+            .await
+            .map_err(|e| FsError::from_sftp(e, path))
+    }
+
+    async fn open_write(&self, path: &str) -> Result<Self::Writer> {
+        self.session
+            .create(path)
             .await
             .map_err(|e| FsError::from_sftp(e, path))
     }

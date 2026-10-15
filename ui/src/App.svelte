@@ -6,6 +6,7 @@
   import TerminalTab from './lib/TerminalTab.svelte'
   import SettingsDialog from './lib/SettingsDialog.svelte'
   import SftpPanel from './lib/SftpPanel.svelte'
+  import TransferBar from './lib/TransferBar.svelte'
   import { loadSettings } from './lib/settings.svelte'
   import { deleteNode, duplicateSession, listNodes, saveNode } from './lib/api'
   import { invoke } from '@tauri-apps/api/core'
@@ -285,6 +286,7 @@
         <p class="welcome">{t('welcome')}</p>
       {/if}
     </div>
+    <TransferBar />
   </section>
 </main>
 

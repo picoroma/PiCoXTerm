@@ -1,6 +1,10 @@
 <script lang="ts">
-  import { untrack } from 'svelte'
+  import { onMount, untrack } from 'svelte'
   import { invoke } from '@tauri-apps/api/core'
+  import { getCurrentWebview } from '@tauri-apps/api/webview'
+  import { open as openDialog } from '@tauri-apps/plugin-dialog'
+  import ConflictDialog from './ConflictDialog.svelte'
+  import { discardPlan, startTransfer, type ConflictPolicy, type PlanSummary } from './transfers.svelte'
   import { t } from '../i18n'
   import type { SftpEntry, TrackingInfo } from './types'
 
@@ -47,7 +51,14 @@
   let filter = $state('')
   let sortKey = $state<SortKey>('name')
   let sortAsc = $state(true)
-  let selected = $state<string | null>(null)
+  let selection = $state(new Set<string>())
+  let anchor = $state<string | null>(null)
+  let panelEl = $state<HTMLElement>()
+  let dropActive = $state(false)
+  let actionError = $state('')
+  /** Piano in attesa di una scelta sui conflitti. */
+  let pending = $state<{ plan: PlanSummary; title: string; onSettled: () => void } | null>(null)
+  let menu = $state<{ x: number; y: number; entry: SftpEntry | null } | null>(null)
   let pathInput = $state('')
 
   const cur = $derived(connId !== null ? states[connId] : undefined)
@@ -87,7 +98,8 @@
       if (seq !== st.seq) return // una navigazione più recente ha preso il posto di questa
       st.entries = entries
       st.path = path
-      selected = null
+      selection = new Set()
+      anchor = null
       if (push) {
         st.history = [...st.history.slice(0, st.index + 1), path]
         st.index = st.history.length - 1
@@ -222,7 +234,169 @@
 
   const icon = (e: SftpEntry) => (e.kind === 'dir' ? '📁' : e.isSymlink ? '🔗' : '📄')
 
+  /** Selezione come in Esplora risorse: clic, Ctrl+clic per aggiungere/togliere, Maiusc+clic per un intervallo. */
+  function selectRow(e: SftpEntry, ev: MouseEvent) {
+    if (ev.shiftKey && anchor) {
+      const a = rows.findIndex((r) => r.path === anchor)
+      const b = rows.findIndex((r) => r.path === e.path)
+      if (a >= 0 && b >= 0) {
+        const [from, to] = a < b ? [a, b] : [b, a]
+        selection = new Set(rows.slice(from, to + 1).map((r) => r.path))
+        return
+      }
+    }
+    const next = new Set(ev.ctrlKey || ev.metaKey ? selection : [])
+    if ((ev.ctrlKey || ev.metaKey) && next.has(e.path)) next.delete(e.path)
+    else next.add(e.path)
+    selection = next
+    anchor = e.path
+  }
+
+  // ---- Trasferimenti ----
+
+  function fmtBytes(n: number): string {
+    return formatSize(n)
+  }
+
+  /** Mostra la scelta sui conflitti se serve, altrimenti avvia subito. */
+  function confirmAndStart(plan: PlanSummary, title: string, onSettled: () => void) {
+    if (plan.fileCount === 0 && plan.dirCount === 0) {
+      actionError = t('nothingToTransfer')
+      void discardPlan(plan)
+      return
+    }
+    if (plan.conflicts > 0) {
+      pending = { plan, title, onSettled }
+    } else {
+      void startTransfer(plan, 'overwrite', title, onSettled)
+    }
+  }
+
+  function startPending(policy: ConflictPolicy) {
+    if (!pending) return
+    const p = pending
+    pending = null
+    void startTransfer(p.plan, policy, p.title, p.onSettled)
+  }
+
+  function cancelPending() {
+    if (pending) void discardPlan(pending.plan)
+    pending = null
+  }
+
+  /** Carica file o cartelle locali nella cartella mostrata. */
+  async function upload(paths: string[]) {
+    if (connId === null || !cur || paths.length === 0) return
+    const id = connId
+    const dir = cur.path
+    actionError = ''
+    try {
+      const plan = await invoke<PlanSummary>('transfer_plan_upload', { id, localPaths: paths, remoteDir: dir })
+      const title = t('uploadTitle', { n: plan.fileCount, size: fmtBytes(plan.totalBytes), dir })
+      confirmAndStart(plan, title, () => {
+        // Se si sta ancora guardando quella cartella, la si aggiorna.
+        if (states[id]?.path === dir) void go(id, dir, false)
+      })
+    } catch (e) {
+      actionError = String(e)
+    }
+  }
+
+  async function pickUpload(folders: boolean) {
+    actionError = ''
+    try {
+      const picked = await openDialog({ multiple: true, directory: folders, title: folders ? t('uploadFolder') : t('uploadFiles') })
+      const paths = Array.isArray(picked) ? picked : typeof picked === 'string' ? [picked] : []
+      await upload(paths)
+    } catch (e) {
+      actionError = String(e)
+    }
+  }
+
+  /** Scarica la selezione in una cartella locale scelta dall'utente. */
+  async function downloadSelection() {
+    if (connId === null || !cur || selection.size === 0) return
+    const id = connId
+    actionError = ''
+    try {
+      const dest = await openDialog({ directory: true, multiple: false, title: t('downloadTo') })
+      if (typeof dest !== 'string') return
+      const paths = [...selection]
+      const plan = await invoke<PlanSummary>('transfer_plan_download', { id, remotePaths: paths, localDir: dest })
+      const title = t('downloadTitle', { n: plan.fileCount, size: fmtBytes(plan.totalBytes), dir: dest })
+      confirmAndStart(plan, title, () => {})
+    } catch (e) {
+      actionError = String(e)
+    }
+  }
+
+  // ---- Menu col tasto destro ----
+
+  function rowMenu(ev: MouseEvent, e: SftpEntry) {
+    ev.preventDefault()
+    ev.stopPropagation()
+    if (!selection.has(e.path)) {
+      selection = new Set([e.path])
+      anchor = e.path
+    }
+    menu = { x: ev.clientX, y: ev.clientY, entry: e }
+  }
+
+  function emptyMenu(ev: MouseEvent) {
+    ev.preventDefault()
+    menu = { x: ev.clientX, y: ev.clientY, entry: null }
+  }
+
+  function pick(action: () => void) {
+    action()
+    menu = null
+  }
+
+  // ---- Trascinamento da Esplora risorse (evento nativo di Tauri) ----
+
+  function insidePanel(pos: { x: number; y: number }): boolean {
+    if (!panelEl) return false
+    const r = panelEl.getBoundingClientRect()
+    const x = pos.x / window.devicePixelRatio
+    const y = pos.y / window.devicePixelRatio
+    return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom
+  }
+
+  onMount(() => {
+    let unlisten: (() => void) | undefined
+    let disposed = false
+    getCurrentWebview()
+      .onDragDropEvent((event) => {
+        const p = event.payload
+        if (p.type === 'enter' || p.type === 'over') {
+          dropActive = connId !== null && !!cur && insidePanel(p.position)
+        } else if (p.type === 'drop') {
+          const inside = connId !== null && !!cur && insidePanel(p.position)
+          dropActive = false
+          if (inside) void upload(p.paths)
+        } else {
+          dropActive = false
+        }
+      })
+      .then((u) => {
+        if (disposed) u()
+        else unlisten = u
+      })
+      .catch(() => {
+        /* fuori da Tauri (anteprima nel browser) il trascinamento nativo non esiste */
+      })
+    return () => {
+      disposed = true
+      unlisten?.()
+    }
+  })
+
   function onkey(e: KeyboardEvent, entry: SftpEntry) {
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a') {
+      e.preventDefault()
+      selection = new Set(rows.map((r) => r.path))
+      return
+    }
     if (e.key === 'Enter') {
       e.preventDefault()
       open(entry)
@@ -233,7 +407,9 @@
   }
 </script>
 
-<section class="sftp" aria-label={t('sftp')}>
+<svelte:window onclick={() => (menu = null)} onkeydown={(e) => e.key === 'Escape' && (menu = null)} />
+
+<section class="sftp" class:dropping={dropActive} bind:this={panelEl} aria-label={t('sftp')}>
   <div class="head">
     <strong>{t('sftp')}</strong>
     <span class="spacer"></span>
@@ -249,6 +425,9 @@
       aria-label={t('followTerminal')}
       onclick={() => (follow = !follow)}>{follow ? '🔒' : '🔓'}</button
     >
+    <button type="button" title={t('uploadFiles')} aria-label={t('uploadFiles')} disabled={!cur} onclick={() => pickUpload(false)}>⬆</button>
+    <button type="button" title={t('uploadFolder')} aria-label={t('uploadFolder')} disabled={!cur} onclick={() => pickUpload(true)}>📁⬆</button>
+    <button type="button" title={t('downloadSelection')} aria-label={t('downloadSelection')} disabled={!cur || selection.size === 0} onclick={downloadSelection}>⬇</button>
     {#if onwiden}
       <button type="button" class:on={wide} aria-pressed={wide} title={wide ? t('narrow') : t('widen')} aria-label={wide ? t('narrow') : t('widen')} onclick={onwiden}>⇔</button>
     {/if}
@@ -291,16 +470,21 @@
       <button type="button" class="c-date" onclick={() => sortBy('modified')}>{t('modified')}{sortKey === 'modified' ? (sortAsc ? ' ▲' : ' ▼') : ''}</button>
     </div>
 
-    <div class="list" role="listbox" aria-label={t('sftp')} aria-busy={cur.loading}>
+    {#if actionError}
+      <div class="error" role="alert">{actionError}</div>
+    {/if}
+
+    <div class="list" role="listbox" tabindex="-1" aria-multiselectable="true" aria-label={t('sftp')} aria-busy={cur.loading} oncontextmenu={emptyMenu}>
       {#each rows as e (e.path)}
         <div
           class="row"
-          class:selected={selected === e.path}
+          class:selected={selection.has(e.path)}
           role="option"
-          aria-selected={selected === e.path}
+          aria-selected={selection.has(e.path)}
           tabindex="0"
           title="{e.name}{modeString(e) ? `\n${modeString(e)}` : ''}{e.owner ? `  ${e.owner}${e.group ? ':' + e.group : ''}` : ''}"
-          onclick={() => (selected = e.path)}
+          onclick={(ev) => selectRow(e, ev)}
+          oncontextmenu={(ev) => rowMenu(ev, e)}
           ondblclick={() => open(e)}
           onkeydown={(ev) => onkey(ev, e)}
         >
@@ -316,7 +500,25 @@
       {/if}
     </div>
   {/if}
+  {#if dropActive && cur}
+    <div class="drop-hint">{t('dropToUpload', { dir: cur.path })}</div>
+  {/if}
 </section>
+
+{#if pending}
+  <ConflictDialog plan={pending.plan} onstart={startPending} oncancel={cancelPending} />
+{/if}
+
+{#if menu}
+  <div class="menu" role="menu" style:left="{menu.x}px" style:top="{menu.y}px">
+    {#if menu.entry}
+      <button role="menuitem" onclick={() => pick(downloadSelection)}>{t('downloadSelection')}</button>
+    {/if}
+    <button role="menuitem" onclick={() => pick(() => pickUpload(false))}>{t('uploadFiles')}</button>
+    <button role="menuitem" onclick={() => pick(() => pickUpload(true))}>{t('uploadFolder')}</button>
+    <button role="menuitem" onclick={() => pick(() => connId !== null && cur && go(connId, cur.path, false))}>{t('refresh')}</button>
+  </div>
+{/if}
 
 <style>
   .sftp {
@@ -423,6 +625,45 @@
     margin: 0;
     color: var(--fg-dim);
     font-size: 12px;
+  }
+  .sftp {
+    position: relative;
+  }
+  .sftp.dropping {
+    outline: 2px dashed var(--accent);
+    outline-offset: -3px;
+  }
+  .drop-hint {
+    position: absolute;
+    inset: auto 8px 8px 8px;
+    padding: 8px;
+    border-radius: 4px;
+    background: var(--accent);
+    color: #fff;
+    font-size: 12px;
+    text-align: center;
+    pointer-events: none;
+    word-break: break-all;
+  }
+  .menu {
+    position: fixed;
+    z-index: 60;
+    min-width: 190px;
+    background: var(--bg-elev);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 4px;
+    display: flex;
+    flex-direction: column;
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
+  }
+  .menu button {
+    text-align: left;
+    border: none;
+    background: transparent;
+  }
+  .menu button:hover {
+    background: var(--bg-hover);
   }
   .notice {
     margin: 0 8px 6px;

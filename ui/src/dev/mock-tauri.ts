@@ -37,9 +37,20 @@ const fakeFs: Record<string, any[]> = {
   '/home/u': [d('projects', '/home/u'), d('.config', '/home/u'), f('notes.txt', '/home/u', 1234), f('big.iso', '/home/u', 5_000_000_000), f('.bashrc', '/home/u', 220), f('Zeta.log', '/home/u', 90), f('alpha.log', '/home/u', 20_000), d('link-to-etc', '/home/u', { isSymlink: true })],
   '/home/u/projects': [f('main.rs', '/home/u/projects', 800), d('src', '/home/u/projects')],
   '/home/u/projects/src': [],
+  '/conflict': [f('a.txt', '/conflict', 10), f('b.log', '/conflict', 20)],
   '/etc': [f('passwd', '/etc', 1900), f('hosts', '/etc', 200), d('ssh', '/etc')],
 }
 ;(window as any).__emitCwd = (path: string) => emit((window as any).__lastEvent, { type: 'cwd', path })
+const plans = new Map<number, any>()
+const jobStates = new Map<number, { cancelled: boolean }>()
+let planSeq = 100
+let jobSeq = 500
+function makePlan(direction: string, fileCount: number, dest: string) {
+  const conflicts = dest.includes('conflict') ? 2 : 0
+  const plan = { planId: ++planSeq, direction, fileCount, dirCount: 1, totalBytes: fileCount * 10_000_000, conflicts, conflictSamples: conflicts ? ['a.txt', 'b.log'] : [] }
+  plans.set(plan.planId, plan)
+  return plan
+}
 let settings: any = {
   schemaVersion: 1,
   theme: 'dark',
@@ -120,9 +131,40 @@ const handlers: Record<string, (args: any) => unknown> = {
   },
   'plugin:path|resolve_directory': () => 'C:\\Users\\mock',
   'plugin:path|join': ({ paths }) => paths.join('\\'),
+  // Il test imposta window.__nextOpen con ciò che "sceglie" l'utente nel selettore di file.
   'plugin:dialog|open': (args) => {
     ;(window as any).__lastOpen = args
-    return null
+    const v = (window as any).__nextOpen ?? null
+    ;(window as any).__nextOpen = null
+    return v
+  },
+  'plugin:event|listen': () => 1,
+  'plugin:event|unlisten': () => {},
+  // Trasferimenti finti: il piano ha conflitti se la cartella di destinazione contiene "conflict".
+  transfer_plan_upload: ({ localPaths, remoteDir }) => makePlan('upload', localPaths.length * 2, remoteDir),
+  transfer_plan_download: ({ remotePaths, localDir }) => makePlan('download', remotePaths.length * 3, localDir),
+  transfer_plan_discard: () => {},
+  transfer_start: ({ planId, policy, onEvent }) => {
+    ;(window as any).__lastPolicy = policy
+    const plan = plans.get(planId)
+    const jobId = ++jobSeq
+    const state = { cancelled: false }
+    jobStates.set(jobId, state)
+    let step = 0
+    const total = plan?.totalBytes ?? 1000
+    const tick = () => {
+      if (state.cancelled) return emit(onEvent, { type: 'cancelled', jobId })
+      step++
+      if (step > 5) return emit(onEvent, { type: 'finished', jobId, summary: { filesDone: plan?.fileCount ?? 0, filesSkipped: policy === 'skip' ? plan?.conflicts ?? 0 : 0, bytes: total, failed: (window as any).__failTransfer ? [{ path: '/x/falla.txt', message: 'permesso negato' }] : [] } })
+      emit(onEvent, { type: 'progress', jobId, bytesDone: Math.round((total * step) / 6), bytesTotal: total, filesDone: step, filesTotal: plan?.fileCount ?? 0, current: `/tmp/file-${step}.bin`, speedBps: 5_000_000 })
+      setTimeout(tick, 150)
+    }
+    setTimeout(tick, 50)
+    return jobId
+  },
+  transfer_cancel: ({ jobId }) => {
+    const st = jobStates.get(jobId)
+    if (st) st.cancelled = true
   },
 }
 

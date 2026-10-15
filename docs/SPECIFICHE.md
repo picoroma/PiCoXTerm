@@ -460,7 +460,7 @@ Fonte: documentazione ufficiale di MobaXterm e guide d'uso (15 ottobre 2026). Mo
 | Trasferimenti | Non documentati nel dettaglio | Coda con avanzamento, annulla e riprova, gestione dei conflitti, ripresa; sempre in streaming |
 | Connessione | Browser separato dal terminale | **Stessa connessione SSH** del terminale (sottosistema `sftp`): nessuna seconda autenticazione; funziona anche attraverso i jump host |
 
-Passi di M2 completati finora: livello `pxt-fs` (elenco, informazioni, percorso di partenza) e pannello di sola navigazione. Restano: operazioni di modifica (crea cartella, rinomina, elimina, permessi), trasferimenti in streaming con coda, trascinamento da e verso Esplora risorse, apertura nell'editor di sistema, azione "cd qui" verso il terminale.
+Passi di M2 completati finora: livello `pxt-fs` (elenco, informazioni, percorso di partenza, flussi di lettura e scrittura), pannello di navigazione con aggancio al terminale (rilevamento automatico della shell: bash, zsh, tcsh) e **trasferimenti di file e cartelle** (sezione 7.3): piano preliminare, un'unica scelta per i conflitti (salta, sovrascrivi, sovrascrivi se più recenti, mantieni entrambi), copia a blocchi su file temporaneo con rename finale, data e permessi conservati, avanzamento con velocità e tempo residuo, annullamento senza file parziali, errori su singoli file che non fermano il lotto, trascinamento da Esplora risorse. Restano: operazioni di modifica (crea cartella, rinomina, elimina, permessi), editor integrato (D-19), trasferimenti paralleli e ripresa, apertura nell'editor di sistema, azione "cd qui" verso il terminale. Il trascinamento **dal** pannello verso Esplora risorse non è possibile con la WebView (si usa "Scarica").
 
 ---
 

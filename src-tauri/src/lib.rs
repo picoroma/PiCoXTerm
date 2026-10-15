@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use pxt_core::{
@@ -8,6 +8,8 @@ use pxt_core::{
     KeyringSecretProvider, LocalSessionProvider, LocalSettings, Outcome, Protocol, Secret,
     SecretProvider, Session, SessionNode, SessionProvider, Settings,
 };
+use pxt_fs::transfer as fs_transfer;
+use pxt_fs::transfer::{ConflictPolicy, Progress};
 use pxt_fs::{Entry, RemoteFs, SftpFs};
 use pxt_ssh::{
     ConnectParams, Credentials, Hop, HostKeyDecision, HostKeyInfo, HostKeyVerifier, KnownHosts,
@@ -34,6 +36,12 @@ struct AppState {
     shells: Mutex<HashMap<u64, Shell>>,
     /// Sessioni SFTP, una per connessione, aperte al primo uso sulla stessa connessione SSH.
     sftp: tokio::sync::Mutex<HashMap<u64, Arc<SftpFs>>>,
+    /// Piani di trasferimento in attesa di conferma (una scelta sui conflitti) o di avvio.
+    plans: Mutex<HashMap<u64, StoredPlan>>,
+    /// Trasferimenti in corso: segnale di annullamento di ciascuno.
+    jobs: Mutex<HashMap<u64, Arc<AtomicBool>>>,
+    /// Destinazione di ogni connessione, per l'audit dei trasferimenti.
+    conn_ctx: Mutex<HashMap<u64, AuditCtx>>,
     pending_hostkeys: Mutex<HashMap<u64, oneshot::Sender<HostKeyDecision>>>,
     next_id: AtomicU64,
 }
@@ -49,6 +57,9 @@ impl AppState {
             data_dir,
             shells: Mutex::default(),
             sftp: tokio::sync::Mutex::default(),
+            plans: Mutex::default(),
+            jobs: Mutex::default(),
+            conn_ctx: Mutex::default(),
             pending_hostkeys: Mutex::default(),
             next_id: AtomicU64::new(0),
         }
@@ -730,6 +741,7 @@ async fn ssh_connect(
 
     let id = state.next_id();
     state.shells.lock().unwrap().insert(id, shell.clone());
+    state.conn_ctx.lock().unwrap().insert(id, ctx.clone());
 
     // Tracciamento della directory (6.4): in automatico, salvo `followCwd` = `off` / `osc7-only`.
     let auto = dest.follow_cwd == FollowCwd::Auto;
@@ -818,6 +830,233 @@ async fn sftp_list(state: Shared<'_>, id: u64, path: String) -> Result<Vec<Entry
     sftp_for(&state, id).await?.list(&path).await.map_err(err)
 }
 
+/// Piano di trasferimento in attesa, legato alla connessione per cui è stato calcolato.
+struct StoredPlan {
+    conn: u64,
+    plan: fs_transfer::Plan,
+}
+
+/// Quanti piani non avviati si tengono al massimo (i più vecchi vengono scartati).
+const MAX_PENDING_PLANS: usize = 20;
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PlanSummary {
+    plan_id: u64,
+    direction: fs_transfer::Direction,
+    file_count: usize,
+    dir_count: usize,
+    total_bytes: u64,
+    conflicts: usize,
+    /// Qualche nome in conflitto, per mostrarlo nel dialogo.
+    conflict_samples: Vec<String>,
+}
+
+fn store_plan(state: &AppState, conn: u64, plan: fs_transfer::Plan) -> PlanSummary {
+    let plan_id = state.next_id();
+    let summary = PlanSummary {
+        plan_id,
+        direction: plan.direction,
+        file_count: plan.file_count,
+        dir_count: plan
+            .items
+            .iter()
+            .filter(|i| i.kind == fs_transfer::ItemKind::Dir)
+            .count(),
+        total_bytes: plan.total_bytes,
+        conflicts: plan.conflicts,
+        conflict_samples: plan
+            .items
+            .iter()
+            .filter(|i| i.conflict)
+            .take(5)
+            .map(|i| {
+                i.dst
+                    .rsplit(['/', '\\'])
+                    .next()
+                    .unwrap_or(&i.dst)
+                    .to_string()
+            })
+            .collect(),
+    };
+    let mut plans = state.plans.lock().unwrap();
+    if plans.len() >= MAX_PENDING_PLANS {
+        if let Some(oldest) = plans.keys().min().copied() {
+            plans.remove(&oldest);
+        }
+    }
+    plans.insert(plan_id, StoredPlan { conn, plan });
+    summary
+}
+
+/// Calcola cosa serve per caricare file e cartelle locali nella cartella remota (nessuna modifica).
+#[tauri::command]
+async fn transfer_plan_upload(
+    state: Shared<'_>,
+    id: u64,
+    local_paths: Vec<String>,
+    remote_dir: String,
+) -> Result<PlanSummary, String> {
+    let fs = sftp_for(&state, id).await?;
+    let paths: Vec<PathBuf> = local_paths.into_iter().map(PathBuf::from).collect();
+    let plan = fs_transfer::plan_upload(&*fs, &paths, &remote_dir)
+        .await
+        .map_err(err)?;
+    Ok(store_plan(&state, id, plan))
+}
+
+/// Calcola cosa serve per scaricare file e cartelle remote nella cartella locale (nessuna modifica).
+#[tauri::command]
+async fn transfer_plan_download(
+    state: Shared<'_>,
+    id: u64,
+    remote_paths: Vec<String>,
+    local_dir: String,
+) -> Result<PlanSummary, String> {
+    let fs = sftp_for(&state, id).await?;
+    let plan = fs_transfer::plan_download(&*fs, &remote_paths, std::path::Path::new(&local_dir))
+        .await
+        .map_err(err)?;
+    Ok(store_plan(&state, id, plan))
+}
+
+/// Scarta un piano che l'utente non ha avviato.
+#[tauri::command]
+fn transfer_plan_discard(state: Shared<'_>, plan_id: u64) {
+    state.plans.lock().unwrap().remove(&plan_id);
+}
+
+/// Avanzamento di un trasferimento, verso la UI (canale per-trasferimento, non evento globale).
+#[derive(Serialize, Clone)]
+#[serde(tag = "type", rename_all = "camelCase")]
+enum TransferEvent {
+    #[serde(rename_all = "camelCase")]
+    Progress {
+        job_id: u64,
+        bytes_done: u64,
+        bytes_total: u64,
+        files_done: usize,
+        files_total: usize,
+        current: String,
+        speed_bps: f64,
+    },
+    #[serde(rename_all = "camelCase")]
+    Finished {
+        job_id: u64,
+        summary: fs_transfer::Summary,
+    },
+    #[serde(rename_all = "camelCase")]
+    Cancelled { job_id: u64 },
+    #[serde(rename_all = "camelCase")]
+    Failed { job_id: u64, message: String },
+}
+
+/// Avvia un piano già calcolato con la politica scelta per i conflitti. Restituisce l'id del lavoro.
+#[tauri::command]
+async fn transfer_start(
+    state: Shared<'_>,
+    plan_id: u64,
+    policy: ConflictPolicy,
+    on_event: Channel<TransferEvent>,
+) -> Result<u64, String> {
+    let stored = state
+        .plans
+        .lock()
+        .unwrap()
+        .remove(&plan_id)
+        .ok_or("piano non trovato (scaduto o già avviato)")?;
+    let fs = sftp_for(&state, stored.conn).await?;
+    let job_id = state.next_id();
+    let cancel = Arc::new(AtomicBool::new(false));
+    state
+        .jobs
+        .lock()
+        .unwrap()
+        .insert(job_id, Arc::clone(&cancel));
+
+    let state = Arc::clone(&state);
+    tauri::async_runtime::spawn(async move {
+        let plan = stored.plan;
+        let started = std::time::Instant::now();
+        // Velocità media mobile sugli ultimi aggiornamenti.
+        let mut last = (started, 0u64);
+        let mut speed = 0.0_f64;
+        let mut report = |p: &Progress| {
+            let now = std::time::Instant::now();
+            let dt = now.duration_since(last.0).as_secs_f64();
+            if dt >= 0.2 {
+                let inst = (p.bytes_done.saturating_sub(last.1)) as f64 / dt;
+                speed = if speed == 0.0 {
+                    inst
+                } else {
+                    0.7 * speed + 0.3 * inst
+                };
+                last = (now, p.bytes_done);
+            }
+            let _ = on_event.send(TransferEvent::Progress {
+                job_id,
+                bytes_done: p.bytes_done,
+                bytes_total: p.bytes_total,
+                files_done: p.files_done,
+                files_total: p.files_total,
+                current: p.current.clone(),
+                speed_bps: speed,
+            });
+        };
+        let result = fs_transfer::run(&*fs, &plan, policy, &cancel, &mut report).await;
+
+        let event_name = match plan.direction {
+            fs_transfer::Direction::Upload => "transfer_upload",
+            fs_transfer::Direction::Download => "transfer_download",
+        };
+        let ctx = state.conn_ctx.lock().unwrap().get(&stored.conn).cloned();
+        let (event, audit_outcome, detail) = match result {
+            Ok(summary) => {
+                let ok = summary.failed.is_empty();
+                let detail = format!(
+                    "{} file, {} byte, {} saltati, {} errori",
+                    summary.files_done,
+                    summary.bytes,
+                    summary.files_skipped,
+                    summary.failed.len()
+                );
+                (
+                    TransferEvent::Finished { job_id, summary },
+                    if ok { Outcome::Ok } else { Outcome::Failed },
+                    detail,
+                )
+            }
+            Err(fs_transfer::TransferError::Cancelled) => (
+                TransferEvent::Cancelled { job_id },
+                Outcome::Failed,
+                "annullato".to_string(),
+            ),
+            Err(e) => (
+                TransferEvent::Failed {
+                    job_id,
+                    message: e.to_string(),
+                },
+                Outcome::Failed,
+                e.to_string(),
+            ),
+        };
+        if let Some(ctx) = ctx {
+            state.audit(&ctx, event_name, audit_outcome, Some(detail));
+        }
+        state.jobs.lock().unwrap().remove(&job_id);
+        let _ = on_event.send(event);
+    });
+    Ok(job_id)
+}
+
+/// Annulla un trasferimento in corso: si ferma entro pochi istanti e non lascia file parziali.
+#[tauri::command]
+fn transfer_cancel(state: Shared<'_>, job_id: u64) {
+    if let Some(flag) = state.jobs.lock().unwrap().get(&job_id) {
+        flag.store(true, Ordering::Relaxed);
+    }
+}
+
 #[tauri::command]
 async fn ssh_write(state: Shared<'_>, id: u64, data: Vec<u8>) -> Result<(), String> {
     get_shell(&state, id)?.write(data).await.map_err(err)
@@ -839,6 +1078,7 @@ async fn ssh_inject_cwd(state: Shared<'_>, id: u64, shell: String) -> Result<(),
 #[tauri::command]
 async fn ssh_close(state: Shared<'_>, id: u64) -> Result<(), String> {
     state.sftp.lock().await.remove(&id);
+    state.conn_ctx.lock().unwrap().remove(&id);
     let shell = state.shells.lock().unwrap().remove(&id);
     if let Some(s) = shell {
         s.close().await;
@@ -931,6 +1171,11 @@ pub fn run() {
             ssh_close,
             sftp_home,
             sftp_list,
+            transfer_plan_upload,
+            transfer_plan_download,
+            transfer_plan_discard,
+            transfer_start,
+            transfer_cancel,
             ssh_inject_cwd,
             ssh_enable_cwd_tracking,
             hostkey_reply,
