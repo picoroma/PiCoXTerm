@@ -28,3 +28,11 @@ cat id_plain.pub id_enc.pub > authorized.pub
 ```
 cargo test -p pxt-ssh --test auth_e2e -- --ignored --test-threads=1
 ```
+
+## Verifica SEC-01 (nessuna porta in ascolto)
+
+```
+powershell -ExecutionPolicy Bypass -File testenv/check-no-listeners.ps1
+```
+
+Avvia l'exe, confronta tutti i socket del PC prima e dopo e controlla che nessuno appartenga a PiCoXterm o al suo WebView2. Con una sessione già aperta (anche con jump host o trasferimenti) si usa `-Attach`. Esce con codice 0 se tutto è in regola.
