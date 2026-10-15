@@ -28,6 +28,18 @@ function emit(channel: string, message: unknown) {
   channelIndex.set(id, i + 1)
   callbacks.get(id)?.({ index: i, message })
 }
+// Server fittizio "srv" con un piccolo filesystem, per provare il pannello SFTP.
+const d = (name: string, parent: string, extra: object = {}) => ({ name, path: `${parent === '/' ? '' : parent}/${name}`, kind: 'dir', isSymlink: false, size: 4096, modified: 1760000000, mode: 0o755, owner: 'u', group: 'users', uid: 1000, gid: 100, ...extra })
+const f = (name: string, parent: string, size: number, extra: object = {}) => ({ name, path: `${parent === '/' ? '' : parent}/${name}`, kind: 'file', isSymlink: false, size, modified: 1760100000, mode: 0o644, owner: 'u', group: 'users', uid: 1000, gid: 100, ...extra })
+const fakeFs: Record<string, any[]> = {
+  '/': [d('home', '/'), d('etc', '/'), d('usr', '/'), d('var', '/')],
+  '/home': [d('u', '/home')],
+  '/home/u': [d('projects', '/home/u'), d('.config', '/home/u'), f('notes.txt', '/home/u', 1234), f('big.iso', '/home/u', 5_000_000_000), f('.bashrc', '/home/u', 220), f('Zeta.log', '/home/u', 90), f('alpha.log', '/home/u', 20_000), d('link-to-etc', '/home/u', { isSymlink: true })],
+  '/home/u/projects': [f('main.rs', '/home/u/projects', 800), d('src', '/home/u/projects')],
+  '/home/u/projects/src': [],
+  '/etc': [f('passwd', '/etc', 1900), f('hosts', '/etc', 200), d('ssh', '/etc')],
+}
+;(window as any).__emitCwd = (path: string) => emit((window as any).__lastEvent, { type: 'cwd', path })
 let settings: any = {
   schemaVersion: 1,
   theme: 'dark',
@@ -52,6 +64,11 @@ const handlers: Record<string, (args: any) => unknown> = {
     return copy
   },
   ssh_resize: () => {},
+  sftp_home: () => '/home/u',
+  sftp_list: ({ path }) => {
+    if (!(path in fakeFs)) throw `percorso non trovato: ${path}`
+    return fakeFs[path]
+  },
   ssh_write: () => {},
   ssh_close: () => {},
   ssh_inject_cwd: () => {},
@@ -82,6 +99,10 @@ const handlers: Record<string, (args: any) => unknown> = {
   },
   // host "newhost" = chiave sconosciuta; "changed" = chiave cambiata; altro = chiede la password
   ssh_connect: async ({ request, onEvent }) => {
+    if (request.host === 'srv') {
+      ;(window as any).__lastEvent = onEvent
+      return 7
+    }
     if (request.host === 'changed') {
       emit(onEvent, { type: 'hostKeyChanged', host: 'changed', port: 22, expected: 'SHA256:vecchia1111', got: 'SHA256:nuova2222' })
       throw 'hostkey-changed'

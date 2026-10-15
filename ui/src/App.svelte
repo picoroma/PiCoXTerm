@@ -5,6 +5,7 @@
   import SessionTree from './lib/SessionTree.svelte'
   import TerminalTab from './lib/TerminalTab.svelte'
   import SettingsDialog from './lib/SettingsDialog.svelte'
+  import SftpPanel from './lib/SftpPanel.svelte'
   import { loadSettings } from './lib/settings.svelte'
   import { deleteNode, duplicateSession, listNodes, saveNode } from './lib/api'
   import { newFolder, newSession, type Folder, type Session, type SessionNode, type Target, type Uuid } from './lib/types'
@@ -14,6 +15,10 @@
     key: number
     title: string
     target: Target
+    /** Collegamento SSH della scheda, per il pannello SFTP (aggiornato dalla scheda stessa). */
+    connId: number | null
+    cwd: string
+    status: 'connecting' | 'connected' | 'closed'
   }
 
   let nodes = $state<SessionNode[]>([])
@@ -29,6 +34,56 @@
   let quick = $state('')
   let showSettings = $state(false)
 
+  const activeTab = $derived(tabs.find((x) => x.key === activeKey))
+  const liveConnIds = $derived(tabs.map((x) => x.connId).filter((id): id is number => id !== null))
+
+  // Dimensioni della sidebar e del pannello SFTP, ricordate tra un avvio e l'altro.
+  const load = (key: string, fallback: number) => {
+    try {
+      const v = Number(localStorage.getItem(key))
+      return Number.isFinite(v) && v > 0 ? v : fallback
+    } catch {
+      return fallback
+    }
+  }
+  const store = (key: string, value: number) => {
+    try {
+      localStorage.setItem(key, String(Math.round(value)))
+    } catch {
+      /* il salvataggio è solo una comodità */
+    }
+  }
+  let sidebarWidth = $state(load('pxt.sidebarWidth', 300))
+  let sftpHeight = $state(load('pxt.sftpHeight', 300))
+  let wide = $state(false)
+  const NORMAL_WIDTH_MIN = 220
+  const effectiveWidth = $derived(wide ? Math.min(Math.round(window.innerWidth * 0.6), 900) : sidebarWidth)
+
+  /** Trascinamento di un divisore con il puntatore. */
+  function drag(e: PointerEvent, kind: 'width' | 'height') {
+    e.preventDefault()
+    const startX = e.clientX
+    const startY = e.clientY
+    const startW = sidebarWidth
+    const startH = sftpHeight
+    const move = (ev: PointerEvent) => {
+      if (kind === 'width') {
+        wide = false
+        sidebarWidth = Math.max(NORMAL_WIDTH_MIN, Math.min(700, startW + ev.clientX - startX))
+      } else {
+        sftpHeight = Math.max(140, Math.min(window.innerHeight - 220, startH - (ev.clientY - startY)))
+      }
+    }
+    const up = () => {
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', up)
+      store('pxt.sidebarWidth', sidebarWidth)
+      store('pxt.sftpHeight', sftpHeight)
+    }
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', up)
+  }
+
   async function reload() {
     try {
       nodes = await listNodes()
@@ -43,7 +98,7 @@
   })
 
   function openTab(title: string, target: Target) {
-    const tab = { key: nextKey++, title, target }
+    const tab: Tab = { key: nextKey++, title, target, connId: null, cwd: '', status: 'connecting' }
     tabs.push(tab)
     activeKey = tab.key
   }
@@ -140,8 +195,9 @@
   }
 </script>
 
-<main>
+<main style:grid-template-columns="{effectiveWidth}px 5px 1fr">
   <aside>
+    <div class="tree">
     <SessionTree
       {nodes}
       onopen={openSession}
@@ -153,7 +209,19 @@
       ondelete={(n) => (deleting = n)}
       onmove={move}
     />
+    </div>
+    <div class="hsplit" role="separator" aria-orientation="horizontal" aria-label={t('resize')} onpointerdown={(e) => drag(e, 'height')}></div>
+    <div class="sftp" style:height="{sftpHeight}px">
+      <SftpPanel
+        connId={activeTab?.status === 'connected' ? activeTab.connId : null}
+        cwd={activeTab?.cwd ?? ''}
+        liveIds={liveConnIds}
+        {wide}
+        onwiden={() => (wide = !wide)}
+      />
+    </div>
   </aside>
+  <div class="vsplit" role="separator" aria-orientation="vertical" aria-label={t('resize')} onpointerdown={(e) => drag(e, 'width')}></div>
 
   <section class="content">
     <div class="topbar">
@@ -185,6 +253,9 @@
           target={tab.target}
           active={tab.key === activeKey}
           ui={sessionUi(tab.target.sessionId)}
+          bind:connId={tab.connId}
+          bind:cwd={tab.cwd}
+          bind:status={tab.status}
           onmanagehostkeys={() => (showSettings = true)}
           savePassword={tab.target.sessionId ? passwordSaver(tab.target.sessionId) : undefined}
         />
@@ -232,13 +303,37 @@
 <style>
   main {
     display: grid;
-    grid-template-columns: 300px 1fr;
     height: 100vh;
   }
   aside {
     background: var(--bg-elev);
-    border-right: 1px solid var(--border);
     min-height: 0;
+    display: flex;
+    flex-direction: column;
+  }
+  .tree {
+    flex: 1 1 0;
+    min-height: 120px;
+    overflow: hidden;
+  }
+  .sftp {
+    flex: none;
+    min-height: 140px;
+    overflow: hidden;
+  }
+  .hsplit {
+    height: 5px;
+    flex: none;
+    cursor: row-resize;
+    background: var(--border);
+  }
+  .vsplit {
+    cursor: col-resize;
+    background: var(--border);
+  }
+  .hsplit:hover,
+  .vsplit:hover {
+    background: var(--accent);
   }
   .content {
     display: flex;

@@ -66,9 +66,19 @@ pub(crate) enum Cmd {
 #[derive(Clone)]
 pub struct Shell {
     pub(crate) tx: mpsc::Sender<Cmd>,
+    /// Connessione condivisa: serve ad aprire altri canali (SFTP) senza una seconda autenticazione.
+    handle: Arc<client::Handle<Client>>,
 }
 
 impl Shell {
+    /// Apre un canale verso il sottosistema `sftp` sulla stessa connessione della shell.
+    /// Il flusso va dato a un client SFTP (per esempio `pxt_fs::SftpFs::connect`).
+    pub async fn open_sftp_stream(&self) -> Result<russh::ChannelStream<client::Msg>, SshError> {
+        let channel = self.handle.channel_open_session().await?;
+        channel.request_subsystem(true, "sftp").await?;
+        Ok(channel.into_stream())
+    }
+
     pub async fn write(&self, data: Vec<u8>) -> Result<(), SshError> {
         self.tx
             .send(Cmd::Write(data))
@@ -257,6 +267,7 @@ pub async fn connect_shell(
     events: mpsc::Sender<ShellEvent>,
 ) -> Result<Shell, SshError> {
     let Chain { handle, upstream } = connect_chain(p.hops, &known, &verifier, None).await?;
+    let handle = Arc::new(handle);
 
     let mut channel = handle.channel_open_session().await?;
     channel
@@ -265,9 +276,11 @@ pub async fn connect_shell(
     channel.request_shell(true).await?;
 
     let (tx, mut rx) = mpsc::channel::<Cmd>(256);
+    let task_handle = Arc::clone(&handle);
     tokio::spawn(async move {
-        // Chiudere il task chiude la connessione, jump host compresi.
-        let _keep_alive = (handle, upstream);
+        // La connessione (jump host compresi) resta aperta finché esiste almeno una copia di `Shell`
+        // o questo task.
+        let _keep_alive = (task_handle, upstream);
         let mut exit = None;
         let mut osc7 = Osc7Scanner::new();
         loop {
@@ -296,5 +309,5 @@ pub async fn connect_shell(
         let _ = events.send(ShellEvent::Closed(exit)).await;
     });
 
-    Ok(Shell { tx })
+    Ok(Shell { tx, handle })
 }

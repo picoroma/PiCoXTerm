@@ -8,6 +8,7 @@ use pxt_core::{
     LocalSessionProvider, LocalSettings, Outcome, Protocol, Secret, SecretProvider, Session,
     SessionNode, SessionProvider, Settings,
 };
+use pxt_fs::{Entry, RemoteFs, SftpFs};
 use pxt_ssh::{
     ConnectParams, Credentials, Hop, HostKeyDecision, HostKeyInfo, HostKeyVerifier, KnownHosts,
     Shell, ShellEvent, SshError,
@@ -31,6 +32,8 @@ struct AppState {
     data_dir: PathBuf,
     known_hosts: PathBuf,
     shells: Mutex<HashMap<u64, Shell>>,
+    /// Sessioni SFTP, una per connessione, aperte al primo uso sulla stessa connessione SSH.
+    sftp: tokio::sync::Mutex<HashMap<u64, Arc<SftpFs>>>,
     pending_hostkeys: Mutex<HashMap<u64, oneshot::Sender<HostKeyDecision>>>,
     next_id: AtomicU64,
 }
@@ -45,6 +48,7 @@ impl AppState {
             known_hosts: data_dir.join("known_hosts"),
             data_dir,
             shells: Mutex::default(),
+            sftp: tokio::sync::Mutex::default(),
             pending_hostkeys: Mutex::default(),
             next_id: AtomicU64::new(0),
         }
@@ -729,6 +733,35 @@ fn get_shell(state: &AppState, id: u64) -> Result<Shell, String> {
         .ok_or_else(|| "sessione inesistente".to_string())
 }
 
+/// Sessione SFTP della connessione: la apre al primo uso (nessuna seconda autenticazione).
+async fn sftp_for(state: &AppState, id: u64) -> Result<Arc<SftpFs>, String> {
+    let mut open = state.sftp.lock().await;
+    if let Some(fs) = open.get(&id) {
+        return Ok(Arc::clone(fs));
+    }
+    let shell = get_shell(state, id)?;
+    let stream = shell.open_sftp_stream().await.map_err(err)?;
+    let fs = Arc::new(SftpFs::connect(stream).await.map_err(err)?);
+    open.insert(id, Arc::clone(&fs));
+    Ok(fs)
+}
+
+/// Cartella di partenza dell'SFTP (di norma la home dell'utente sul server).
+#[tauri::command]
+async fn sftp_home(state: Shared<'_>, id: u64) -> Result<String, String> {
+    sftp_for(&state, id)
+        .await?
+        .canonicalize(".")
+        .await
+        .map_err(err)
+}
+
+/// Contenuto di una cartella remota.
+#[tauri::command]
+async fn sftp_list(state: Shared<'_>, id: u64, path: String) -> Result<Vec<Entry>, String> {
+    sftp_for(&state, id).await?.list(&path).await.map_err(err)
+}
+
 #[tauri::command]
 async fn ssh_write(state: Shared<'_>, id: u64, data: Vec<u8>) -> Result<(), String> {
     get_shell(&state, id)?.write(data).await.map_err(err)
@@ -749,6 +782,7 @@ async fn ssh_inject_cwd(state: Shared<'_>, id: u64, shell: String) -> Result<(),
 
 #[tauri::command]
 async fn ssh_close(state: Shared<'_>, id: u64) -> Result<(), String> {
+    state.sftp.lock().await.remove(&id);
     let shell = state.shells.lock().unwrap().remove(&id);
     if let Some(s) = shell {
         s.close().await;
@@ -839,6 +873,8 @@ pub fn run() {
             ssh_write,
             ssh_resize,
             ssh_close,
+            sftp_home,
+            sftp_list,
             ssh_inject_cwd,
             hostkey_reply,
             known_hosts_list,

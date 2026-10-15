@@ -24,6 +24,9 @@
     ui = null,
     savePassword,
     onmanagehostkeys,
+    connId = $bindable(null),
+    status = $bindable('connecting'),
+    cwd = $bindable(''),
   }: {
     target: Target
     active: boolean
@@ -31,6 +34,11 @@
     ui?: SessionUi | null
     /** Salva la password nella sessione (solo per sessioni salvate). */
     savePassword?: (password: string) => Promise<void>
+    /** Connessione SSH di questa scheda, per il pannello SFTP (null se non collegata). */
+    connId?: number | null
+    status?: 'connecting' | 'connected' | 'closed'
+    /** Directory corrente del terminale (OSC 7). */
+    cwd?: string
     /** Apre la gestione delle host key salvate (impostazioni). */
     onmanagehostkeys?: () => void
   } = $props()
@@ -40,9 +48,7 @@
   const HOSTKEY_CHANGED = 'hostkey-changed'
   let askKind = $state<'password' | 'passphrase'>('password')
 
-  let status = $state<'connecting' | 'connected' | 'closed'>('connecting')
   let error = $state('')
-  let cwd = $state('')
   let injectShell = $state('bash')
   let hostKeyPrompt = $state<Extract<TermEvent, { type: 'hostKey' }> | null>(null)
   let hostKeyChanged = $state<Extract<TermEvent, { type: 'hostKeyChanged' }> | null>(null)
@@ -62,7 +68,6 @@
   let query = $state('')
   let caseSensitive = $state(false)
   let noMatch = $state(false)
-  let connId: number | null = null
   const encoder = new TextEncoder()
 
   /** Luminosità percepita di un colore #rrggbb, da 0 a 1. */
@@ -145,7 +150,10 @@
       else if (ev.type === 'closed') {
         term.write(`\r\n\x1b[33m[${t('closed')}]\x1b[0m\r\n`)
         status = 'closed'
+        // Libera la connessione chiusa (e la sua sessione SFTP) lato backend.
+        const old = connId
         connId = null
+        if (old !== null) void invoke('ssh_close', { id: old })
       }
     }
     try {

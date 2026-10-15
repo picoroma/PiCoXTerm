@@ -434,6 +434,25 @@ Un unico componente UI, usato in due modalità:
 
 ---
 
+### 7.7 Pannello SFTP nella sidebar (M2): cosa riprende da MobaXterm e cosa migliora
+
+Fonte: documentazione ufficiale di MobaXterm e guide d'uso (15 ottobre 2026). MobaXterm mostra un browser nella barra laterale a sinistra, con trascinamento da e verso Esplora risorse, doppio clic per aprire e modificare un file (le modifiche vengono salvate sul server in automatico), un'opzione sperimentale "Follow SSH path" che tiene il browser nella directory del terminale, e un tipo di browser selezionabile (SFTP o SCP).
+
+| Aspetto | MobaXterm | PiCoXterm |
+|---|---|---|
+| Posizione | Sidebar a sinistra | Sidebar a sinistra, **sotto l'albero**, con divisori trascinabili (larghezza e altezza ricordate) e un pulsante per **allargare** la sidebar quando serve più spazio |
+| Seguire il terminale | Opzione sperimentale | Lucchetto sempre visibile: agganciato = segue la `cwd`; sbloccato = navigazione libera. La navigazione manuale non viene annullata; si torna a seguire solo al cambio di directory del terminale o riagganciando |
+| Navigazione | Elenco | Campo del percorso modificabile, cronologia **indietro/avanti**, cartella superiore, aggiorna |
+| Elenco | Colonne base | Colonne ordinabili (nome, dimensione, data), cartelle sempre prime, **filtro rapido**, file nascosti a richiesta, permessi e proprietario nella descrizione al passaggio del mouse; i link simbolici verso cartelle si aprono come cartelle |
+| Errori | Non documentati | Messaggio chiaro (percorso inesistente, permesso negato) con "Riprova"; l'elenco precedente resta visibile |
+| Modifica di un file remoto | Salvataggio automatico sul server | Prevista (M2, passo successivo): conferma prima di caricare, configurabile; controllo che il file remoto non sia cambiato nel frattempo |
+| Trasferimenti | Non documentati nel dettaglio | Coda con avanzamento, annulla e riprova, gestione dei conflitti, ripresa; sempre in streaming |
+| Connessione | Browser separato dal terminale | **Stessa connessione SSH** del terminale (sottosistema `sftp`): nessuna seconda autenticazione; funziona anche attraverso i jump host |
+
+Passi di M2 completati finora: livello `pxt-fs` (elenco, informazioni, percorso di partenza) e pannello di sola navigazione. Restano: operazioni di modifica (crea cartella, rinomina, elimina, permessi), trasferimenti in streaming con coda, trascinamento da e verso Esplora risorse, apertura nell'editor di sistema, azione "cd qui" verso il terminale.
+
+---
+
 ## 8. Albero delle sessioni e interfaccia
 
 ### 8.1 Layout della finestra

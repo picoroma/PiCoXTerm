@@ -116,3 +116,18 @@ export function subtreeIds(nodes: SessionNode[], root: Uuid): Set<Uuid> {
   }
   return ids
 }
+
+/** Voce di una cartella remota (specchio di `pxt_fs::Entry`). */
+export interface SftpEntry {
+  name: string
+  path: string
+  kind: 'file' | 'dir' | 'other'
+  isSymlink: boolean
+  size: number
+  modified: number | null
+  mode: number | null
+  owner: string | null
+  group: string | null
+  uid: number | null
+  gid: number | null
+}
