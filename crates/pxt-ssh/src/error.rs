@@ -26,6 +26,8 @@ pub enum SshError {
     UnsupportedHostKey,
     #[error("il server non consente l'inoltro TCP verso il salto successivo (AllowTcpForwarding)")]
     ForwardingDenied,
+    #[error("{host}: {source}")]
+    Target { host: String, source: Box<SshError> },
     #[error("jump host {host}: {source}")]
     Jump { host: String, source: Box<SshError> },
     #[error("errore di I/O: {0}")]

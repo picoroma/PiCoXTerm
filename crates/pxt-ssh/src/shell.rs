@@ -183,6 +183,12 @@ pub async fn connect_shell(
                     host: label,
                     source: Box::new(e),
                 }
+            } else if matches!(e, SshError::Io(_) | SshError::Ssh(_)) {
+                // Errori di rete: dire a quale host si riferiscono.
+                SshError::Target {
+                    host: label,
+                    source: Box::new(e),
+                }
             } else {
                 e
             }
