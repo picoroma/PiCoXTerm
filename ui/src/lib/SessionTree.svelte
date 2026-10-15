@@ -119,19 +119,51 @@
     return target === null || !subtreeIds(nodes, dragId).has(target)
   }
 
-  function dragOver(e: DragEvent, target: Uuid | null) {
-    if (!canDrop(target)) return
-    e.preventDefault()
-    e.stopPropagation()
-    dropTarget = target ?? 'root'
+  // Trascinamento con eventi del puntatore: il drag HTML5 su Windows è intercettato da Tauri
+  // (che serve ai file trascinati da Esplora risorse), quindi qui non lo si usa.
+  let press: { id: Uuid; x: number; y: number } | null = null
+  let ghost = $state<{ x: number; y: number; label: string } | null>(null)
+  let justDragged = false
+
+  function pointerDown(e: PointerEvent, n: SessionNode) {
+    if (e.button !== 0) return
+    press = { id: n.id, x: e.clientX, y: e.clientY }
   }
 
-  function drop(e: DragEvent, target: Uuid | null) {
-    e.preventDefault()
-    e.stopPropagation()
-    if (dragId && canDrop(target)) onmove(dragId, target)
+  /** Cartella di destinazione sotto il puntatore: `undefined` = nessuna, `null` = radice. */
+  function targetAt(x: number, y: number): Uuid | null | undefined {
+    const el = document.elementFromPoint(x, y)
+    const row = el?.closest<HTMLElement>('[data-node-id]')
+    if (row) {
+      const n = nodes.find((v) => v.id === row.dataset.nodeId)
+      return n ? (n.type === 'folder' ? n.id : n.parentId) : undefined
+    }
+    return el?.closest('.list') ? null : undefined
+  }
+
+  function pointerMove(e: PointerEvent) {
+    if (!press) return
+    if (!dragId) {
+      if (Math.hypot(e.clientX - press.x, e.clientY - press.y) < 6) return
+      dragId = press.id
+    }
+    const label = nodes.find((n) => n.id === dragId)?.name ?? ''
+    ghost = { x: e.clientX, y: e.clientY, label }
+    const target = targetAt(e.clientX, e.clientY)
+    dropTarget = target !== undefined && canDrop(target) ? (target ?? 'root') : null
+  }
+
+  function pointerUp(e: PointerEvent) {
+    if (dragId) {
+      const target = targetAt(e.clientX, e.clientY)
+      if (target !== undefined && canDrop(target)) onmove(dragId, target)
+      justDragged = true // sopprime il click che segue il rilascio
+      setTimeout(() => (justDragged = false), 0)
+    }
+    press = null
     dragId = null
     dropTarget = null
+    ghost = null
   }
 
   function onkey(e: KeyboardEvent, n: SessionNode) {
@@ -145,7 +177,12 @@
   }
 </script>
 
-<svelte:window onclick={() => (menu = null)} onkeydown={(e) => e.key === 'Escape' && (menu = null)} />
+<svelte:window
+  onclick={() => (menu = null)}
+  onkeydown={(e) => e.key === 'Escape' && (menu = null)}
+  onpointermove={pointerMove}
+  onpointerup={pointerUp}
+/>
 
 <div class="tree">
   <div class="head">
@@ -166,9 +203,6 @@
     role="tree"
     tabindex="-1"
     oncontextmenu={(e) => openMenu(e, null)}
-    ondragover={(e) => dragOver(e, null)}
-    ondragleave={() => (dropTarget = null)}
-    ondrop={(e) => drop(e, null)}
   >
     {#each rows as { node, depth, expanded } (node.id)}
       <div
@@ -180,19 +214,11 @@
         aria-selected={selected === node.id}
         aria-expanded={node.type === 'folder' ? expanded : undefined}
         tabindex="0"
-        draggable="true"
-        ondragstart={(e) => {
-          dragId = node.id
-          e.dataTransfer?.setData('text/plain', node.id)
-        }}
-        ondragend={() => {
-          dragId = null
-          dropTarget = null
-        }}
-        ondragover={(e) => dragOver(e, node.type === 'folder' ? node.id : node.parentId)}
-        ondrop={(e) => drop(e, node.type === 'folder' ? node.id : node.parentId)}
+        data-node-id={node.id}
+        onpointerdown={(e) => pointerDown(e, node)}
         onclick={(e) => {
           e.stopPropagation()
+          if (justDragged) return
           selected = node.id
           if (node.type === 'folder') toggle(node.id)
         }}
@@ -212,6 +238,10 @@
     {/if}
   </div>
 </div>
+
+{#if ghost}
+  <div class="ghost" style:left="{ghost.x + 12}px" style:top="{ghost.y + 8}px">{ghost.label}</div>
+{/if}
 
 {#if menu}
   {@const target = menu.node}
@@ -299,6 +329,16 @@
   .empty {
     padding: 12px;
     color: var(--fg-dim);
+  }
+  .ghost {
+    position: fixed;
+    z-index: 70;
+    pointer-events: none;
+    padding: 2px 8px;
+    border-radius: 4px;
+    background: var(--accent);
+    color: #fff;
+    font-size: 13px;
   }
   .menu {
     position: fixed;
