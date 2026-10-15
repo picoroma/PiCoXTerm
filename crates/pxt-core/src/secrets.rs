@@ -49,6 +49,12 @@ mod tests {
 
     #[tokio::test]
     async fn set_get_delete_roundtrip() {
+        // Il runner Linux della CI non ha un servizio di segreti (Secret Service / D-Bus):
+        // lì il test non può girare. Resta attivo su Windows, macOS e in locale.
+        if cfg!(target_os = "linux") && std::env::var_os("CI").is_some() {
+            eprintln!("keyring non disponibile nella CI Linux: test saltato");
+            return;
+        }
         let p = KeyringSecretProvider::new("PiCoXterm-test");
         let r = CredentialRef {
             provider: "local".into(),
