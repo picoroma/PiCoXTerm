@@ -15,7 +15,19 @@ const key = { ...newSession(null), name: 'jump (chiave)', host: '10.0.0.2', user
 key.auth = { method: 'key', keyPath: 'C:\\keys\\id_ed25519' }
 let nodes: SessionNode[] = [root, pw, key]
 
-let cb = 0
+let nextCallback = 0
+const callbacks = new Map<number, (m: unknown) => void>()
+const channelIndex = new Map<number, number>()
+let pendingReply: ((decision: string) => void) | null = null
+;(window as any).__lastDecision = null
+
+/** Invia un messaggio a un Channel ricevuto come argomento (`__CHANNEL__:<id>`). */
+function emit(channel: string, message: unknown) {
+  const id = Number(channel.split(':')[1])
+  const i = channelIndex.get(id) ?? 0
+  channelIndex.set(id, i + 1)
+  callbacks.get(id)?.({ index: i, message })
+}
 let settings: any = {
   schemaVersion: 1,
   theme: 'dark',
@@ -28,6 +40,19 @@ let settings: any = {
 }
 const handlers: Record<string, (args: any) => unknown> = {
   settings_get: () => settings,
+  ssh_resize: () => {},
+  ssh_write: () => {},
+  ssh_close: () => {},
+  ssh_inject_cwd: () => {},
+  known_hosts_list: () => [
+    { host: '127.0.0.1', port: 2222, keyType: 'ssh-ed25519', fingerprint: 'SHA256:abcdefghijklmnopqrstuvwxyz0123456789ABCDEFG' },
+    { host: '10.0.0.1', port: 22, keyType: 'ssh-rsa', fingerprint: 'SHA256:zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz' },
+  ],
+  known_hosts_remove: () => 1,
+  hostkey_reply: ({ decision }) => {
+    ;(window as any).__lastDecision = decision
+    pendingReply?.(decision)
+  },
   app_paths: () => ({ dataDir: 'C:\\Users\\mock\\PiCoXterm', auditLog: 'C:\\Users\\mock\\PiCoXterm\\logs\\audit.log' }),
   sessions_export: () => nodes.length,
   sessions_import: () => 3,
@@ -44,7 +69,20 @@ const handlers: Record<string, (args: any) => unknown> = {
     const doomed = subtreeIds(nodes, id)
     nodes = nodes.filter((n) => !doomed.has(n.id))
   },
-  ssh_connect: () => Promise.reject('password-required'),
+  // host "newhost" = chiave sconosciuta; "changed" = chiave cambiata; altro = chiede la password
+  ssh_connect: async ({ request, onEvent }) => {
+    if (request.host === 'changed') {
+      emit(onEvent, { type: 'hostKeyChanged', host: 'changed', port: 22, expected: 'SHA256:vecchia1111', got: 'SHA256:nuova2222' })
+      throw 'hostkey-changed'
+    }
+    if (request.host === 'newhost') {
+      emit(onEvent, { type: 'hostKey', reqId: 1, host: 'newhost', port: 22, keyType: 'ssh-ed25519', fingerprint: 'SHA256:xyzxyzxyz' })
+      const decision = await new Promise<string>((r) => (pendingReply = r))
+      if (decision === 'reject') throw 'host key rifiutata dall’utente'
+      return 1
+    }
+    throw 'password-required'
+  },
   'plugin:path|resolve_directory': () => 'C:\\Users\\mock',
   'plugin:path|join': ({ paths }) => paths.join('\\'),
   'plugin:dialog|open': () => null,
@@ -57,8 +95,12 @@ const handlers: Record<string, (args: any) => unknown> = {
     // Come l'IPC reale: gli argomenti passano per JSON
     return h(args === undefined ? args : JSON.parse(JSON.stringify(args)))
   },
-  transformCallback: () => ++cb,
-  unregisterCallback: () => {},
+  transformCallback: (fn: (m: unknown) => void) => {
+    const id = ++nextCallback
+    callbacks.set(id, fn)
+    return id
+  },
+  unregisterCallback: (id: number) => callbacks.delete(id),
   convertFileSrc: (p: string) => p,
   metadata: { currentWindow: { label: 'main' }, currentWebview: { label: 'main' } },
 }

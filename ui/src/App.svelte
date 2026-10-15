@@ -184,6 +184,7 @@
           target={tab.target}
           active={tab.key === activeKey}
           ui={sessionUi(tab.target.sessionId)}
+          onmanagehostkeys={() => (showSettings = true)}
           savePassword={tab.target.sessionId ? passwordSaver(tab.target.sessionId) : undefined}
         />
       {/each}

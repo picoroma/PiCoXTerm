@@ -525,6 +525,7 @@ Opzione `sshTunnelVia`: il backend apre un canale `direct-tcpip` su una connessi
 | D-11 | 2026-10-15 | Backend crittografico di russh: **`ring`** al posto di `aws-lc-rs` | `aws-lc-rs` richiede NASM per compilare su Windows; `ring` non ha dipendenze esterne |
 | D-12 | 2026-10-15 | Appunti tramite il plugin ufficiale **tauri-plugin-clipboard-manager**, con i soli permessi `read-text` e `write-text` | `navigator.clipboard` in WebView2 può chiedere permessi a ogni incolla |
 | D-14 | 2026-10-15 | Jump host: catena piatta (max 5) di sessioni SSH salvate, via `direct-tcpip` sulla connessione del salto precedente; le credenziali di ogni jump host devono essere già salvate (keyring), o usare agent / chiave senza passphrase. I `jumpHosts` di un jump host non vengono seguiti | Nessuna porta locale in ascolto (SEC-01); evita dialoghi di password per salti intermedi in v1 |
+| D-15 | 2026-10-15 | Host key: tre scelte per una chiave nuova (accetta una volta / accetta e salva / annulla); chiave cambiata = blocco senza alcuna domanda e dialogo di avviso con le due fingerprint. Si sblocca solo rimuovendo la voce salvata dalle impostazioni (due passaggi, registrato nell'audit) | SEC-03, SEC-04 |
 | D-13 | 2026-10-15 | Esito spike M0: **go** sullo stack. Rischio aperto su NFR-03 (memoria, ~273 MB a riposo per via di WebView2) | Vedi `docs/spike-m0.md` |
 
 ---

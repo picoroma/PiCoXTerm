@@ -14,9 +14,43 @@
   let error = $state('')
   let info = $state('')
   let paths = $state<{ dataDir: string; auditLog: string } | null>(null)
+  interface KnownHost {
+    host: string
+    port: number
+    keyType: string
+    fingerprint: string
+  }
+  let knownHosts = $state<KnownHost[]>([])
+  let confirmRemove = $state<string | null>(null)
+  const khId = (k: KnownHost) => `${k.host}:${k.port}`
+
+  async function loadKnownHosts() {
+    try {
+      knownHosts = await invoke<KnownHost[]>('known_hosts_list')
+    } catch (e) {
+      error = String(e)
+    }
+  }
+
+  /// Due passaggi: il primo clic chiede conferma, il secondo rimuove.
+  async function removeKnownHost(k: KnownHost) {
+    if (confirmRemove !== khId(k)) {
+      confirmRemove = khId(k)
+      return
+    }
+    confirmRemove = null
+    try {
+      await invoke('known_hosts_remove', { host: k.host, port: k.port })
+      await loadKnownHosts()
+    } catch (e) {
+      error = String(e)
+    }
+  }
+
   const jsonFilter = [{ name: 'JSON', extensions: ['json'] }]
 
   onMount(() => {
+    void loadKnownHosts()
     invoke<{ dataDir: string; auditLog: string }>('app_paths')
       .then((p) => (paths = p))
       .catch(() => {})
@@ -88,6 +122,24 @@
         <p class="hint">{t('auditPath')}: <code>{paths.auditLog}</code></p>
       {/if}
     </fieldset>
+    <fieldset>
+      <legend>{t('knownHosts')}</legend>
+      {#if knownHosts.length === 0}
+        <p class="hint">{t('noKnownHosts')}</p>
+      {/if}
+      {#each knownHosts as k (k.host + k.port + k.keyType)}
+        <div class="kh">
+          <div class="grow">
+            <strong>{k.host}:{k.port}</strong> <span class="hint">{k.keyType}</span>
+            <div class="hint mono">{k.fingerprint}</div>
+          </div>
+          <button type="button" class:danger={confirmRemove === khId(k)} onclick={() => removeKnownHost(k)}>
+            {confirmRemove === khId(k) ? t('confirmRemove') : t('removeHostKey')}
+          </button>
+        </div>
+      {/each}
+      <p class="hint">{t('knownHostsHint')}</p>
+    </fieldset>
     {#if info}<p class="ok">{info}</p>{/if}
     {#if error}<p class="err">{error}</p>{/if}
   </form>
@@ -137,6 +189,15 @@
     margin: 0;
     font-size: 12px;
     word-break: break-all;
+  }
+  .kh {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--fg);
+  }
+  .mono {
+    font-family: Consolas, monospace;
   }
   .ok {
     color: #5cb85c;

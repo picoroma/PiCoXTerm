@@ -9,8 +9,8 @@ use pxt_core::{
     SessionNode, SessionProvider, Settings,
 };
 use pxt_ssh::{
-    ConnectParams, Credentials, Hop, HostKeyInfo, HostKeyVerifier, KnownHosts, Shell, ShellEvent,
-    SshError,
+    ConnectParams, Credentials, Hop, HostKeyDecision, HostKeyInfo, HostKeyVerifier, KnownHosts,
+    Shell, ShellEvent, SshError,
 };
 use serde::{Deserialize, Serialize};
 use tauri::ipc::{Channel, InvokeResponseBody};
@@ -31,7 +31,7 @@ struct AppState {
     data_dir: PathBuf,
     known_hosts: PathBuf,
     shells: Mutex<HashMap<u64, Shell>>,
-    pending_hostkeys: Mutex<HashMap<u64, oneshot::Sender<bool>>>,
+    pending_hostkeys: Mutex<HashMap<u64, oneshot::Sender<HostKeyDecision>>>,
     next_id: AtomicU64,
 }
 
@@ -79,15 +79,22 @@ struct AuditCtx {
     via: Vec<String>,
 }
 
-fn is_hostkey_changed(e: &SshError) -> bool {
+/// Dettagli di una host key cambiata, anche se avvenuta su un jump host.
+fn hostkey_changed(e: &SshError) -> Option<(String, u16, String, String)> {
     match e {
-        SshError::HostKeyChanged { .. } => true,
-        SshError::Jump { source, .. } | SshError::Target { source, .. } => {
-            is_hostkey_changed(source)
-        }
-        _ => false,
+        SshError::HostKeyChanged {
+            host,
+            port,
+            expected,
+            got,
+        } => Some((host.clone(), *port, expected.clone(), got.clone())),
+        SshError::Jump { source, .. } | SshError::Target { source, .. } => hostkey_changed(source),
+        _ => None,
     }
 }
+
+/// Codice d'errore letto dalla UI: la connessione è stata bloccata per host key cambiata.
+const HOSTKEY_CHANGED: &str = "hostkey-changed";
 
 type Shared<'a> = State<'a, Arc<AppState>>;
 
@@ -123,6 +130,13 @@ enum TermEvent {
         port: u16,
         key_type: String,
         fingerprint: String,
+    },
+    /// La chiave del server è diversa da quella salvata: connessione bloccata (SEC-04).
+    HostKeyChanged {
+        host: String,
+        port: u16,
+        expected: String,
+        got: String,
     },
     Closed {
         exit: Option<u32>,
@@ -443,26 +457,26 @@ async fn ssh_connect(
                 });
                 if sent.is_err() {
                     state.pending_hostkeys.lock().unwrap().remove(&req_id);
-                    return false;
+                    return HostKeyDecision::Reject;
                 }
-                let accepted = rx.await.unwrap_or(false);
-                let event = if accepted {
-                    "hostkey_accepted"
-                } else {
-                    "hostkey_rejected"
+                let decision = rx.await.unwrap_or(HostKeyDecision::Reject);
+                let (event, outcome, how) = match decision {
+                    HostKeyDecision::Reject => ("hostkey_rejected", Outcome::Failed, ""),
+                    HostKeyDecision::AcceptOnce => {
+                        ("hostkey_accepted", Outcome::Ok, " (una volta)")
+                    }
+                    HostKeyDecision::AcceptAndSave => {
+                        ("hostkey_accepted", Outcome::Ok, " (salvata)")
+                    }
                 };
-                let outcome = if accepted {
-                    Outcome::Ok
-                } else {
-                    Outcome::Failed
-                };
-                state.audit(&ctx, event, outcome, Some(key_detail));
-                accepted
+                state.audit(&ctx, event, outcome, Some(format!("{key_detail}{how}")));
+                decision
             })
         })
     };
 
     let (ev_tx, mut ev_rx) = mpsc::channel::<ShellEvent>(64);
+    let on_event_for_errors = on_event.clone();
     let pump_state = Arc::clone(&state);
     let pump_ctx = ctx.clone();
     tauri::async_runtime::spawn(async move {
@@ -504,13 +518,20 @@ async fn ssh_connect(
         }
         Err(e) => {
             // La richiesta di passphrase non è un fallimento: l'utente la fornirà.
-            if is_hostkey_changed(&e) {
+            if let Some((host, port, expected, got)) = hostkey_changed(&e) {
                 state.audit(
                     &ctx,
                     "hostkey_changed",
                     Outcome::Failed,
                     Some(e.to_string()),
                 );
+                let _ = on_event_for_errors.send(TermEvent::HostKeyChanged {
+                    host,
+                    port,
+                    expected,
+                    got,
+                });
+                return Err(HOSTKEY_CHANGED.to_string());
             } else if !matches!(e, SshError::PassphraseRequired) {
                 state.audit(&ctx, "connect", Outcome::Failed, Some(e.to_string()));
             }
@@ -564,10 +585,61 @@ async fn ssh_close(state: Shared<'_>, id: u64) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn hostkey_reply(state: Shared<'_>, req_id: u64, accept: bool) {
+fn hostkey_reply(state: Shared<'_>, req_id: u64, decision: String) {
+    let decision = match decision.as_str() {
+        "once" => HostKeyDecision::AcceptOnce,
+        "save" => HostKeyDecision::AcceptAndSave,
+        _ => HostKeyDecision::Reject,
+    };
     if let Some(tx) = state.pending_hostkeys.lock().unwrap().remove(&req_id) {
-        let _ = tx.send(accept);
+        let _ = tx.send(decision);
     }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct KnownHostDto {
+    host: String,
+    port: u16,
+    key_type: String,
+    fingerprint: String,
+}
+
+#[tauri::command]
+fn known_hosts_list(state: Shared<'_>) -> Result<Vec<KnownHostDto>, String> {
+    let entries = KnownHosts::new(state.known_hosts.clone())
+        .list()
+        .map_err(err)?;
+    Ok(entries
+        .into_iter()
+        .map(|e| KnownHostDto {
+            host: e.host,
+            port: e.port,
+            key_type: e.key_type,
+            fingerprint: e.fingerprint,
+        })
+        .collect())
+}
+
+/// Toglie le host key salvate di un host: al prossimo accesso verrà chiesta di nuovo conferma.
+#[tauri::command]
+fn known_hosts_remove(state: Shared<'_>, host: String, port: u16) -> Result<usize, String> {
+    let removed = KnownHosts::new(state.known_hosts.clone())
+        .remove(&host, port)
+        .map_err(err)?;
+    let ctx = AuditCtx {
+        host,
+        port,
+        user: String::new(),
+        via: Vec::new(),
+    };
+    state.audit(
+        &ctx,
+        "hostkey_removed",
+        Outcome::Ok,
+        Some(format!("{removed} voci")),
+    );
+    Ok(removed)
 }
 
 pub fn run() {
@@ -594,7 +666,9 @@ pub fn run() {
             ssh_resize,
             ssh_close,
             ssh_inject_cwd,
-            hostkey_reply
+            hostkey_reply,
+            known_hosts_list,
+            known_hosts_remove
         ])
         .run(tauri::generate_context!())
         .expect("errore nell'avvio di PiCoXterm");

@@ -14,6 +14,7 @@
 
   type TermEvent =
     | { type: 'hostKey'; reqId: number; host: string; port: number; keyType: string; fingerprint: string }
+    | { type: 'hostKeyChanged'; host: string; port: number; expected: string; got: string }
     | { type: 'closed'; exit: number | null }
     | { type: 'cwd'; path: string }
 
@@ -22,6 +23,7 @@
     active,
     ui = null,
     savePassword,
+    onmanagehostkeys,
   }: {
     target: Target
     active: boolean
@@ -29,10 +31,13 @@
     ui?: SessionUi | null
     /** Salva la password nella sessione (solo per sessioni salvate). */
     savePassword?: (password: string) => Promise<void>
+    /** Apre la gestione delle host key salvate (impostazioni). */
+    onmanagehostkeys?: () => void
   } = $props()
 
   const PASSWORD_REQUIRED = 'password-required'
   const PASSPHRASE_REQUIRED = 'passphrase-required'
+  const HOSTKEY_CHANGED = 'hostkey-changed'
   let askKind = $state<'password' | 'passphrase'>('password')
 
   let status = $state<'connecting' | 'connected' | 'closed'>('connecting')
@@ -40,6 +45,7 @@
   let cwd = $state('')
   let injectShell = $state('bash')
   let hostKeyPrompt = $state<Extract<TermEvent, { type: 'hostKey' }> | null>(null)
+  let hostKeyChanged = $state<Extract<TermEvent, { type: 'hostKeyChanged' }> | null>(null)
   let pendingPaste = $state<string | null>(null)
   let askPassword = $state(false)
   let passwordInput = $state('')
@@ -134,6 +140,7 @@
     const onEvent = new Channel<TermEvent>()
     onEvent.onmessage = (ev) => {
       if (ev.type === 'hostKey') hostKeyPrompt = ev
+      else if (ev.type === 'hostKeyChanged') hostKeyChanged = ev
       else if (ev.type === 'cwd') cwd = ev.path
       else if (ev.type === 'closed') {
         term.write(`\r\n\x1b[33m[${t('closed')}]\x1b[0m\r\n`)
@@ -162,6 +169,8 @@
         passwordInput = ''
         savePasswordChecked = false
         askPassword = true
+      } else if (String(e) === HOSTKEY_CHANGED) {
+        error = t('hostKeyChangedShort')
       } else {
         error = String(e)
       }
@@ -182,11 +191,11 @@
     await connect(pw)
   }
 
-  async function replyHostKey(accept: boolean) {
+  async function replyHostKey(decision: 'once' | 'save' | 'reject') {
     if (!hostKeyPrompt) return
     const reqId = hostKeyPrompt.reqId
     hostKeyPrompt = null
-    await invoke('hostkey_reply', { reqId, accept })
+    await invoke('hostkey_reply', { reqId, decision })
   }
 
   async function injectCwd() {
@@ -365,7 +374,7 @@
 {/if}
 
 {#if hostKeyPrompt}
-  <Modal title={t('hostKeyTitle')} onclose={() => replyHostKey(false)}>
+  <Modal title={t('hostKeyTitle')} onclose={() => replyHostKey('reject')}>
     <p>{t('hostKeyBody')}</p>
     <dl>
       <dt>{t('host')}</dt>
@@ -376,8 +385,35 @@
       <dd class="mono">{hostKeyPrompt.fingerprint}</dd>
     </dl>
     {#snippet actions()}
-      <button onclick={() => replyHostKey(false)}>{t('cancel')}</button>
-      <button class="primary" onclick={() => replyHostKey(true)}>{t('accept')}</button>
+      <button onclick={() => replyHostKey('reject')}>{t('cancel')}</button>
+      <button onclick={() => replyHostKey('once')}>{t('acceptOnce')}</button>
+      <button class="primary" onclick={() => replyHostKey('save')}>{t('accept')}</button>
+    {/snippet}
+  </Modal>
+{/if}
+
+{#if hostKeyChanged}
+  <Modal title={t('hostKeyChangedTitle')} onclose={() => (hostKeyChanged = null)}>
+    <p class="alert">{t('hostKeyChangedBody')}</p>
+    <dl>
+      <dt>{t('host')}</dt>
+      <dd>{hostKeyChanged.host}:{hostKeyChanged.port}</dd>
+      <dt>{t('fingerprintSaved')}</dt>
+      <dd class="mono">{hostKeyChanged.expected}</dd>
+      <dt>{t('fingerprintReceived')}</dt>
+      <dd class="mono">{hostKeyChanged.got}</dd>
+    </dl>
+    <p class="dim">{t('hostKeyChangedHelp')}</p>
+    {#snippet actions()}
+      {#if onmanagehostkeys}
+        <button
+          onclick={() => {
+            hostKeyChanged = null
+            onmanagehostkeys()
+          }}>{t('manageHostKeys')}</button
+        >
+      {/if}
+      <button class="primary" onclick={() => (hostKeyChanged = null)}>{t('close')}</button>
     {/snippet}
   </Modal>
 {/if}
@@ -458,6 +494,14 @@
   .mono {
     font-family: Consolas, monospace;
     word-break: break-all;
+  }
+  .alert {
+    margin-top: 0;
+    padding: 10px;
+    border-radius: 4px;
+    background: var(--danger);
+    color: #fff;
+    font-weight: 600;
   }
   .preview {
     max-height: 160px;

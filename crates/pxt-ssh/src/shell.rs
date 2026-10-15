@@ -36,9 +36,18 @@ pub struct HostKeyInfo {
     pub fingerprint: String,
 }
 
+/// Scelta dell'utente davanti a una host key sconosciuta (SEC-03).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HostKeyDecision {
+    Reject,
+    /// Si fida per questa connessione, senza salvare la chiave.
+    AcceptOnce,
+    AcceptAndSave,
+}
+
 /// Chiede all'utente se accettare una host key sconosciuta.
 pub type HostKeyVerifier =
-    Arc<dyn Fn(HostKeyInfo) -> Pin<Box<dyn Future<Output = bool> + Send>> + Send + Sync>;
+    Arc<dyn Fn(HostKeyInfo) -> Pin<Box<dyn Future<Output = HostKeyDecision> + Send>> + Send + Sync>;
 
 #[derive(Debug)]
 pub enum ShellEvent {
@@ -113,12 +122,14 @@ impl Handler for Client {
                     key_type: key_type.clone(),
                     fingerprint: fingerprint.clone(),
                 };
-                if (self.verifier)(info).await {
-                    self.known
-                        .add(&self.host, self.port, &key_type, &fingerprint)?;
-                    Ok(true)
-                } else {
-                    Err(SshError::HostKeyRejected)
+                match (self.verifier)(info).await {
+                    HostKeyDecision::Reject => Err(SshError::HostKeyRejected),
+                    HostKeyDecision::AcceptOnce => Ok(true),
+                    HostKeyDecision::AcceptAndSave => {
+                        self.known
+                            .add(&self.host, self.port, &key_type, &fingerprint)?;
+                        Ok(true)
+                    }
                 }
             }
         }

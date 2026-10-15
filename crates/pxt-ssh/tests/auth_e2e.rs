@@ -30,7 +30,8 @@ async fn try_chain(hops: Vec<Hop>) -> Result<String, SshError> {
     let (tx, mut rx) = mpsc::channel(64);
     let known =
         KnownHosts::new(std::env::temp_dir().join(format!("pxt-e2e-kh-{}", std::process::id())));
-    let verifier: HostKeyVerifier = Arc::new(|_| Box::pin(async { true }));
+    let verifier: HostKeyVerifier =
+        Arc::new(|_| Box::pin(async { pxt_ssh::HostKeyDecision::AcceptAndSave }));
     let shell = connect_shell(
         ConnectParams {
             hops,
@@ -179,4 +180,118 @@ async fn unencrypted_key_with_stray_passphrase() {
     .await;
     println!("risultato: {r:?}");
     assert!(r.is_ok(), "{r:?}");
+}
+
+// ---- Host key (SEC-03 / SEC-04) ----
+
+use pxt_ssh::HostKeyDecision;
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+fn fresh_known() -> KnownHosts {
+    let dir = std::env::temp_dir().join(format!("pxt-e2e-hk-{}", uuid_like()));
+    KnownHosts::new(dir.join("known_hosts"))
+}
+
+fn uuid_like() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let n = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    format!("{}-{n}", std::process::id())
+}
+
+/// Connessione con password e verifier configurabile; conta quante volte il verifier viene interpellato.
+async fn connect_with(
+    known: KnownHosts,
+    decision: HostKeyDecision,
+) -> (Result<(), SshError>, usize) {
+    let asked = Arc::new(AtomicUsize::new(0));
+    let counter = Arc::clone(&asked);
+    let verifier: HostKeyVerifier = Arc::new(move |_| {
+        counter.fetch_add(1, Ordering::SeqCst);
+        Box::pin(async move { decision })
+    });
+    let (tx, _rx) = mpsc::channel(16);
+    let r = connect_shell(
+        ConnectParams {
+            hops: vec![hop(Credentials::Password("test".into()))],
+            cols: 80,
+            rows: 24,
+            term: "xterm".into(),
+        },
+        known,
+        verifier,
+        tx,
+    )
+    .await
+    .map(|s| {
+        let _ = s;
+    });
+    (r, asked.load(Ordering::SeqCst))
+}
+
+#[tokio::test]
+#[ignore = "richiede il container di testenv"]
+async fn host_key_accept_and_save_then_known() {
+    let known = fresh_known();
+    let (r, asked) = connect_with(known.clone(), HostKeyDecision::AcceptAndSave).await;
+    r.unwrap();
+    assert_eq!(asked, 1);
+    assert_eq!(known.list().unwrap().len(), 1);
+    // seconda connessione: la chiave è nota, nessuna domanda
+    let (r, asked) = connect_with(known.clone(), HostKeyDecision::Reject).await;
+    r.unwrap();
+    assert_eq!(asked, 0);
+}
+
+#[tokio::test]
+#[ignore = "richiede il container di testenv"]
+async fn host_key_accept_once_is_not_saved() {
+    let known = fresh_known();
+    let (r, asked) = connect_with(known.clone(), HostKeyDecision::AcceptOnce).await;
+    r.unwrap();
+    assert_eq!(asked, 1);
+    assert!(known.list().unwrap().is_empty());
+    // la volta dopo viene chiesto di nuovo
+    let (_, asked) = connect_with(known.clone(), HostKeyDecision::AcceptOnce).await;
+    assert_eq!(asked, 1);
+}
+
+#[tokio::test]
+#[ignore = "richiede il container di testenv"]
+async fn host_key_rejected_blocks_and_saves_nothing() {
+    let known = fresh_known();
+    let (r, _) = connect_with(known.clone(), HostKeyDecision::Reject).await;
+    assert!(matches!(r.unwrap_err(), SshError::HostKeyRejected));
+    assert!(known.list().unwrap().is_empty());
+}
+
+#[tokio::test]
+#[ignore = "richiede il container di testenv"]
+async fn changed_host_key_is_blocked_without_asking_and_unlocks_only_after_removal() {
+    let known = fresh_known();
+    known
+        .add(
+            "127.0.0.1",
+            2222,
+            "ssh-ed25519",
+            "SHA256:chiave-vecchia-diversa",
+        )
+        .unwrap();
+    // Anche un verifier che direbbe sempre sì non deve mai essere interpellato.
+    let (r, asked) = connect_with(known.clone(), HostKeyDecision::AcceptAndSave).await;
+    assert!(matches!(r.unwrap_err(), SshError::HostKeyChanged { .. }));
+    assert_eq!(asked, 0);
+    assert_eq!(
+        known.list().unwrap().len(),
+        1,
+        "la voce vecchia non va toccata"
+    );
+
+    // Rimossa la voce a mano, l'host torna sconosciuto e si può riaccettare.
+    assert_eq!(known.remove("127.0.0.1", 2222).unwrap(), 1);
+    let (r, asked) = connect_with(known.clone(), HostKeyDecision::AcceptAndSave).await;
+    r.unwrap();
+    assert_eq!(asked, 1);
 }
