@@ -169,6 +169,33 @@ impl SessionNode {
     }
 }
 
+/// Id del nodo e di tutti i suoi discendenti.
+pub fn subtree_ids(nodes: &[SessionNode], root: Uuid) -> Vec<Uuid> {
+    let mut ids = vec![root];
+    let mut i = 0;
+    while i < ids.len() {
+        let parent = ids[i];
+        ids.extend(
+            nodes
+                .iter()
+                .filter(|n| n.parent_id() == Some(parent))
+                .map(|n| n.id()),
+        );
+        i += 1;
+    }
+    ids
+}
+
+impl CredentialRef {
+    /// Nuovo riferimento per una credenziale custodita dal provider locale.
+    pub fn new_local() -> Self {
+        Self {
+            provider: "local".into(),
+            id: Uuid::new_v4().to_string(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionsFile {

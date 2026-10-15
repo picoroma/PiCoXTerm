@@ -7,7 +7,7 @@ use std::sync::Mutex;
 use uuid::Uuid;
 
 use crate::error::{CoreError, Result};
-use crate::model::{SessionNode, SessionsFile, SCHEMA_VERSION};
+use crate::model::{subtree_ids, SessionNode, SessionsFile, SCHEMA_VERSION};
 use crate::provider::SessionProvider;
 
 const BACKUPS: usize = 5;
@@ -124,18 +124,7 @@ impl SessionProvider for LocalSessionProvider {
         if !file.nodes.iter().any(|n| n.id() == id) {
             return Err(CoreError::NotFound(id));
         }
-        let mut doomed = vec![id];
-        let mut i = 0;
-        while i < doomed.len() {
-            let parent = doomed[i];
-            doomed.extend(
-                file.nodes
-                    .iter()
-                    .filter(|n| n.parent_id() == Some(parent))
-                    .map(|n| n.id()),
-            );
-            i += 1;
-        }
+        let doomed = subtree_ids(&file.nodes, id);
         file.nodes.retain(|n| !doomed.contains(&n.id()));
         self.store(&file)
     }

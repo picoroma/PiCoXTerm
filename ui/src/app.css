@@ -1,0 +1,63 @@
+:root {
+  --bg: #1e1e1e;
+  --bg-elev: #2b2b2b;
+  --bg-hover: #353535;
+  --border: #4a4a4a;
+  --fg: #dddddd;
+  --fg-dim: #999999;
+  --accent: #2f6fed;
+  --danger: #c0392b;
+  color-scheme: dark;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: system-ui, sans-serif;
+  font-size: 14px;
+}
+
+input,
+select,
+textarea,
+button {
+  font: inherit;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--fg);
+}
+
+button {
+  cursor: pointer;
+}
+
+button:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+button.danger {
+  background: var(--danger);
+  border-color: var(--danger);
+  color: #fff;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}

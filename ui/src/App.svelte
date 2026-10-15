@@ -1,321 +1,275 @@
 <script lang="ts">
-  import { Channel, invoke } from '@tauri-apps/api/core'
-  import { Terminal } from '@xterm/xterm'
-  import { FitAddon } from '@xterm/addon-fit'
-  import '@xterm/xterm/css/xterm.css'
-  import { readText, writeText } from '@tauri-apps/plugin-clipboard-manager'
+  import { onMount } from 'svelte'
+  import Modal from './lib/Modal.svelte'
+  import SessionDialog from './lib/SessionDialog.svelte'
+  import SessionTree from './lib/SessionTree.svelte'
+  import TerminalTab from './lib/TerminalTab.svelte'
+  import { deleteNode, listNodes, saveNode } from './lib/api'
+  import { newFolder, newSession, type Folder, type Session, type SessionNode, type Target, type Uuid } from './lib/types'
   import { t } from './i18n'
 
-  type TermEvent =
-    | { type: 'hostKey'; reqId: number; host: string; port: number; keyType: string; fingerprint: string }
-    | { type: 'closed'; exit: number | null }
-    | { type: 'cwd'; path: string }
-
-  let host = $state('')
-  let port = $state(22)
-  let user = $state('')
-  let password = $state('')
-  let status = $state<'idle' | 'connecting' | 'connected'>('idle')
-  let error = $state('')
-  let cwd = $state('')
-  let injectShell = $state('bash')
-  let pendingPaste = $state<string | null>(null)
-  let hostKeyPrompt = $state<Extract<TermEvent, { type: 'hostKey' }> | null>(null)
-
-  let termEl: HTMLDivElement
-  let term: Terminal | null = null
-  let fit: FitAddon | null = null
-  let sessionId: number | null = null
-  let resizeObs: ResizeObserver | null = null
-  const encoder = new TextEncoder()
-
-  function disposeTerm() {
-    resizeObs?.disconnect()
-    resizeObs = null
-    term?.dispose()
-    term = null
+  interface Tab {
+    key: number
+    title: string
+    target: Target
   }
 
-  async function copySelection() {
-    const sel = term?.getSelection()
-    if (sel) await writeText(sel)
-  }
+  let nodes = $state<SessionNode[]>([])
+  let tabs = $state<Tab[]>([])
+  let activeKey = $state<number | null>(null)
+  let nextKey = 1
+  let notice = $state('')
 
-  async function pasteFromClipboard() {
-    const text = await readText().catch(() => '')
-    if (!text) return
-    if (text.trim().includes('\n')) {
-      pendingPaste = text
-    } else {
-      term?.paste(text)
-    }
-  }
+  let editing = $state<{ session: Session; isNew: boolean } | null>(null)
+  let folderDialog = $state<{ folder: Folder; isNew: boolean } | null>(null)
+  let folderName = $state('')
+  let deleting = $state<SessionNode | null>(null)
+  let quick = $state('')
 
-  function confirmPaste(ok: boolean) {
-    const text = pendingPaste
-    pendingPaste = null
-    if (ok && text) term?.paste(text)
-    term?.focus()
-  }
-
-  async function connect(e: Event) {
-    e.preventDefault()
-    error = ''
-    status = 'connecting'
-    disposeTerm()
-
-    term = new Terminal({
-      fontFamily: 'Consolas, "DejaVu Sans Mono", monospace',
-      fontSize: 14,
-      scrollback: 10000,
-      cursorBlink: true,
-    })
-    fit = new FitAddon()
-    term.loadAddon(fit)
-    term.open(termEl)
-    fit.fit()
-    // Copia su selezione; Ctrl+Shift+C / Ctrl+Shift+V come alternativa da tastiera
-    term.onSelectionChange(() => void copySelection())
-    term.attachCustomKeyEventHandler((ev) => {
-      if (ev.type === 'keydown' && ev.ctrlKey && ev.shiftKey) {
-        if (ev.code === 'KeyC') {
-          void copySelection()
-          return false
-        }
-        if (ev.code === 'KeyV') {
-          void pasteFromClipboard()
-          return false
-        }
-      }
-      return true
-    })
-
-    const onData = new Channel<ArrayBuffer | number[]>()
-    onData.onmessage = (buf) => {
-      term?.write(buf instanceof ArrayBuffer ? new Uint8Array(buf) : new Uint8Array(buf))
-    }
-    const onEvent = new Channel<TermEvent>()
-    onEvent.onmessage = (ev) => {
-      if (ev.type === 'hostKey') {
-        hostKeyPrompt = ev
-      } else if (ev.type === 'cwd') {
-        cwd = ev.path
-      } else if (ev.type === 'closed') {
-        term?.write(`\r\n\x1b[33m[${t('closed')}]\x1b[0m\r\n`)
-        status = 'idle'
-        sessionId = null
-      }
-    }
-
-    const pwd = password
-    password = ''
+  async function reload() {
     try {
-      sessionId = await invoke<number>('ssh_connect', {
-        host,
-        port,
-        username: user,
-        password: pwd,
-        cols: term.cols,
-        rows: term.rows,
-        onData,
-        onEvent,
-      })
-    } catch (err) {
-      error = String(err)
-      status = 'idle'
-      disposeTerm()
+      nodes = await listNodes()
+    } catch (e) {
+      notice = `${t('loadError')}: ${e}`
+    }
+  }
+
+  onMount(reload)
+
+  function openTab(title: string, target: Target) {
+    const tab = { key: nextKey++, title, target }
+    tabs.push(tab)
+    activeKey = tab.key
+  }
+
+  function closeTab(key: number) {
+    const i = tabs.findIndex((x) => x.key === key)
+    if (i < 0) return
+    tabs.splice(i, 1)
+    if (activeKey === key) activeKey = tabs[Math.min(i, tabs.length - 1)]?.key ?? null
+  }
+
+  function openSession(s: Session) {
+    openTab(s.name, { sessionId: s.id })
+  }
+
+  function quickConnect(e: Event) {
+    e.preventDefault()
+    const m = /^(?:([^@\s]+)@)?([^@:\s]+)(?::(\d{1,5}))?$/.exec(quick.trim())
+    if (!m || !m[1]) {
+      notice = t('quickConnectBad')
       return
     }
-    status = 'connected'
-
-    term.onData((s) => {
-      if (sessionId !== null) invoke('ssh_write', { id: sessionId, data: Array.from(encoder.encode(s)) })
-    })
-    resizeObs = new ResizeObserver(() => {
-      if (!term || !fit) return
-      fit.fit()
-      if (sessionId !== null) invoke('ssh_resize', { id: sessionId, cols: term.cols, rows: term.rows })
-    })
-    resizeObs.observe(termEl)
-    term.focus()
+    notice = ''
+    const [, username, host, port] = m
+    openTab(`${username}@${host}`, { host, port: port ? Number(port) : 22, username })
+    quick = ''
   }
 
-  async function replyHostKey(accept: boolean) {
-    if (!hostKeyPrompt) return
-    const reqId = hostKeyPrompt.reqId
-    hostKeyPrompt = null
-    await invoke('hostkey_reply', { reqId, accept })
+  async function run(action: () => Promise<unknown>) {
+    try {
+      await action()
+      notice = ''
+    } catch (e) {
+      notice = String(e)
+    }
+    await reload()
   }
 
-  async function injectCwd() {
-    if (sessionId !== null) await invoke('ssh_inject_cwd', { id: sessionId, shell: injectShell })
-    term?.focus()
+  function startNewSession(parentId: Uuid | null) {
+    editing = { session: newSession(parentId), isNew: true }
   }
 
-  async function disconnect() {
-    if (sessionId !== null) await invoke('ssh_close', { id: sessionId })
+  async function saveSession(s: Session, password: string | null, clearPassword: boolean) {
+    editing = null
+    await run(() => saveNode(s, password, clearPassword))
+  }
+
+  function startNewFolder(parentId: Uuid | null) {
+    folderName = ''
+    folderDialog = { folder: newFolder('', parentId), isNew: true }
+  }
+
+  function startRename(f: Folder) {
+    folderName = f.name
+    folderDialog = { folder: f, isNew: false }
+  }
+
+  async function saveFolder(e: Event) {
+    e.preventDefault()
+    if (!folderDialog || !folderName.trim()) return
+    const folder = { ...folderDialog.folder, name: folderName.trim() }
+    folderDialog = null
+    await run(() => saveNode(folder))
+  }
+
+  async function confirmDelete() {
+    const n = deleting
+    deleting = null
+    if (n) await run(() => deleteNode(n.id))
+  }
+
+  async function move(id: Uuid, parentId: Uuid | null) {
+    const n = nodes.find((x) => x.id === id)
+    if (!n) return
+    const moved = { ...$state.snapshot(n), parentId } as SessionNode
+    await run(() => saveNode(moved))
+  }
+
+  /** Salva la password digitata in una scheda nella sessione corrispondente. */
+  function passwordSaver(sessionId: Uuid) {
+    return async (password: string) => {
+      const n = nodes.find((x) => x.id === sessionId)
+      if (n?.type === 'session') {
+        await saveNode($state.snapshot(n) as Session, password, false)
+        await reload()
+      }
+    }
   }
 </script>
 
 <main>
-  <form class="bar" onsubmit={connect}>
-    <input placeholder={t('host')} bind:value={host} required disabled={status !== 'idle'} />
-    <input class="port" type="number" min="1" max="65535" aria-label={t('port')} bind:value={port} disabled={status !== 'idle'} />
-    <input placeholder={t('user')} bind:value={user} required disabled={status !== 'idle'} />
-    <input type="password" placeholder={t('password')} bind:value={password} disabled={status !== 'idle'} />
-    {#if status === 'connected'}
-      <select bind:value={injectShell} aria-label="shell">
-        <option>bash</option>
-        <option>tcsh</option>
-      </select>
-      <button type="button" onclick={injectCwd}>{t('injectCwd')}</button>
-      <button type="button" onclick={disconnect}>{t('disconnect')}</button>
-    {:else}
-      <button type="submit" disabled={status === 'connecting'}>
-        {status === 'connecting' ? t('connecting') : t('connect')}
-      </button>
-    {/if}
-  </form>
-  {#if error}<div class="error">{error}</div>{/if}
+  <aside>
+    <SessionTree
+      {nodes}
+      onopen={openSession}
+      onedit={(s) => (editing = { session: $state.snapshot(s) as Session, isNew: false })}
+      onnewsession={startNewSession}
+      onnewfolder={startNewFolder}
+      onrename={startRename}
+      ondelete={(n) => (deleting = n)}
+      onmove={move}
+    />
+  </aside>
 
-  <div
-    class="term"
-    role="presentation"
-    bind:this={termEl}
-    oncontextmenu={(e) => {
-      e.preventDefault()
-      void pasteFromClipboard()
-    }}
-  ></div>
-  <div class="status">{t('cwd')}: {cwd || '—'}</div>
-
-  {#if pendingPaste !== null}
-    <div class="backdrop">
-      <div class="dialog" role="alertdialog" aria-labelledby="pp-title">
-        <h2 id="pp-title">{t('pasteTitle')}</h2>
-        <p>{t('pasteBody').replace('{n}', String(pendingPaste.split('\n').length))}</p>
-        <pre class="preview">{pendingPaste.slice(0, 400)}</pre>
-        <div class="actions">
-          <button onclick={() => confirmPaste(false)}>{t('cancel')}</button>
-          <button class="primary" onclick={() => confirmPaste(true)}>{t('paste')}</button>
-        </div>
-      </div>
+  <section class="content">
+    <div class="topbar">
+      <form onsubmit={quickConnect}>
+        <input bind:value={quick} placeholder={t('quickConnect')} aria-label={t('quickConnect')} />
+        <button type="submit">{t('connect')}</button>
+      </form>
     </div>
-  {/if}
+    {#if notice}<div class="notice">{notice}</div>{/if}
 
-  {#if hostKeyPrompt}
-    <div class="backdrop">
-      <div class="dialog" role="alertdialog" aria-labelledby="hk-title">
-        <h2 id="hk-title">{t('hostKeyTitle')}</h2>
-        <p>{t('hostKeyBody')}</p>
-        <dl>
-          <dt>{t('host')}</dt><dd>{hostKeyPrompt.host}:{hostKeyPrompt.port}</dd>
-          <dt>{t('keyType')}</dt><dd>{hostKeyPrompt.keyType}</dd>
-          <dt>{t('fingerprint')}</dt><dd class="mono">{hostKeyPrompt.fingerprint}</dd>
-        </dl>
-        <div class="actions">
-          <button onclick={() => replyHostKey(false)}>{t('cancel')}</button>
-          <button class="primary" onclick={() => replyHostKey(true)}>{t('accept')}</button>
+    <div class="tabs" role="tablist">
+      {#each tabs as tab (tab.key)}
+        <div class="tab" class:on={tab.key === activeKey} role="presentation">
+          <button role="tab" aria-selected={tab.key === activeKey} onclick={() => (activeKey = tab.key)}>{tab.title}</button>
+          <button class="x" aria-label={t('closeTab')} title={t('closeTab')} onclick={() => closeTab(tab.key)}>×</button>
         </div>
-      </div>
+      {/each}
     </div>
-  {/if}
+
+    <div class="views">
+      {#each tabs as tab (tab.key)}
+        <TerminalTab
+          target={tab.target}
+          active={tab.key === activeKey}
+          savePassword={tab.target.sessionId ? passwordSaver(tab.target.sessionId) : undefined}
+        />
+      {/each}
+      {#if tabs.length === 0}
+        <p class="welcome">{t('welcome')}</p>
+      {/if}
+    </div>
+  </section>
 </main>
 
+{#if editing}
+  <SessionDialog session={editing.session} isNew={editing.isNew} onsave={saveSession} oncancel={() => (editing = null)} />
+{/if}
+
+{#if folderDialog}
+  <Modal title={folderDialog.isNew ? t('newFolder') : t('rename')} onclose={() => (folderDialog = null)}>
+    <form id="folder-form" onsubmit={saveFolder}>
+      <input bind:value={folderName} placeholder={t('folderName')} aria-label={t('folderName')} required />
+    </form>
+    {#snippet actions()}
+      <button type="button" onclick={() => (folderDialog = null)}>{t('cancel')}</button>
+      <button type="submit" form="folder-form" class="primary">{t('save')}</button>
+    {/snippet}
+  </Modal>
+{/if}
+
+{#if deleting}
+  <Modal title={t('delete')} onclose={() => (deleting = null)}>
+    <p>{t(deleting.type === 'folder' ? 'confirmDeleteFolder' : 'confirmDeleteSession', { name: deleting.name })}</p>
+    {#snippet actions()}
+      <button type="button" onclick={() => (deleting = null)}>{t('cancel')}</button>
+      <button type="button" class="danger" onclick={confirmDelete}>{t('delete')}</button>
+    {/snippet}
+  </Modal>
+{/if}
+
 <style>
-  :global(html, body) {
-    margin: 0;
-    height: 100%;
-    background: #1e1e1e;
-    color: #ddd;
-    font-family: system-ui, sans-serif;
-  }
   main {
-    display: flex;
-    flex-direction: column;
+    display: grid;
+    grid-template-columns: 300px 1fr;
     height: 100vh;
   }
-  .bar {
+  aside {
+    background: var(--bg-elev);
+    border-right: 1px solid var(--border);
+    min-height: 0;
+  }
+  .content {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    min-height: 0;
+  }
+  .topbar {
+    padding: 8px;
+    background: var(--bg-elev);
+  }
+  .topbar form {
     display: flex;
     gap: 8px;
-    padding: 8px;
-    background: #2b2b2b;
-  }
-  .status {
-    padding: 4px 8px;
-    background: #2b2b2b;
-    font-family: Consolas, monospace;
-    font-size: 13px;
-  }
-  select,
-  input,
-  button {
-    padding: 6px 10px;
-    border: 1px solid #555;
-    border-radius: 4px;
-    background: #1e1e1e;
-    color: #ddd;
-  }
-  input.port {
-    width: 70px;
-  }
-  button {
-    cursor: pointer;
-  }
-  button.primary {
-    background: #2f6fed;
-    border-color: #2f6fed;
-    color: #fff;
-  }
-  .error {
-    padding: 8px;
-    background: #5a1d1d;
-    color: #ffd6d6;
-    white-space: pre-wrap;
-  }
-  .term {
-    flex: 1;
-    min-height: 0;
-    padding: 4px;
-  }
-  .backdrop {
-    position: fixed;
-    inset: 0;
-    background: rgba(0, 0, 0, 0.6);
-    display: grid;
-    place-items: center;
-  }
-  .dialog {
-    background: #2b2b2b;
-    padding: 20px;
-    border-radius: 8px;
     max-width: 520px;
   }
-  .dialog h2 {
-    margin-top: 0;
+  .topbar input {
+    flex: 1;
   }
-  dt {
-    font-weight: 600;
-    margin-top: 8px;
-  }
-  dd {
-    margin: 0;
-  }
-  .mono {
-    font-family: Consolas, monospace;
-    word-break: break-all;
-  }
-  .preview {
-    max-height: 160px;
-    overflow: auto;
-    background: #1e1e1e;
+  .notice {
     padding: 8px;
-    font-size: 12px;
+    background: #5a3d1d;
+    color: #ffe4c4;
+    white-space: pre-wrap;
   }
-  .actions {
+  .tabs {
     display: flex;
-    justify-content: flex-end;
-    gap: 8px;
-    margin-top: 16px;
+    gap: 2px;
+    background: var(--bg-elev);
+    padding: 0 8px;
+    overflow-x: auto;
+  }
+  .tab {
+    display: flex;
+    align-items: center;
+    border: 1px solid var(--border);
+    border-bottom: none;
+    border-radius: 6px 6px 0 0;
+    background: var(--bg);
+  }
+  .tab.on {
+    background: #000;
+    border-color: var(--accent);
+  }
+  .tab button {
+    border: none;
+    background: transparent;
+    padding: 5px 10px;
+  }
+  .tab .x {
+    padding: 5px 8px;
+    color: var(--fg-dim);
+  }
+  .views {
+    flex: 1;
+    min-height: 0;
+  }
+  .welcome {
+    padding: 24px;
+    color: var(--fg-dim);
   }
 </style>
