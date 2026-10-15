@@ -7,6 +7,8 @@ export interface CredentialRef {
   id: string
 }
 
+export type AuthMethod = 'password' | 'key' | 'agent' | 'keyboard-interactive'
+
 export interface Folder {
   type: 'folder'
   id: Uuid
@@ -24,7 +26,7 @@ export interface Session {
   port: number
   username: string
   credentialRef: CredentialRef | null
-  auth: { method: 'password' | 'key' | 'agent' | 'keyboard-interactive' }
+  auth: { method: AuthMethod; keyPath: string | null }
   jumpHosts: Uuid[]
   ssh: {
     followCwd: 'auto' | 'osc7-only' | 'off'
@@ -68,7 +70,7 @@ export function newSession(parentId: Uuid | null): Session {
     port: 22,
     username: '',
     credentialRef: null,
-    auth: { method: 'password' },
+    auth: { method: 'password', keyPath: null },
     jumpHosts: [],
     ssh: {
       followCwd: 'auto',

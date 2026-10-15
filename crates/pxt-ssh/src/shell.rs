@@ -8,6 +8,7 @@ use russh::keys::{HashAlg, PublicKeyOrCertificate};
 use russh::ChannelMsg;
 use tokio::sync::mpsc;
 
+use crate::auth::{authenticate, Credentials};
 use crate::osc7::Osc7Scanner;
 use crate::{HostKeyStatus, KnownHosts, SshError};
 
@@ -15,7 +16,7 @@ pub struct ConnectParams {
     pub host: String,
     pub port: u16,
     pub username: String,
-    pub password: String,
+    pub auth: Credentials,
     pub cols: u32,
     pub rows: u32,
     pub term: String,
@@ -118,7 +119,7 @@ impl Handler for Client {
     }
 }
 
-/// Apre la connessione, autentica con password, apre una shell con PTY.
+/// Apre la connessione, autentica, apre una shell con PTY.
 /// L'output arriva su `events`; l'input si invia con i metodi di [`Shell`].
 pub async fn connect_shell(
     p: ConnectParams,
@@ -139,13 +140,7 @@ pub async fn connect_shell(
     // Il timeout copre solo il collegamento TCP e lo scambio chiavi, non il dialogo host key.
     let mut handle = client::connect(config, (p.host.as_str(), p.port), handler).await?;
 
-    if !handle
-        .authenticate_password(p.username, p.password)
-        .await?
-        .success()
-    {
-        return Err(SshError::AuthFailed);
-    }
+    authenticate(&mut handle, &p.username, p.auth).await?;
 
     let mut channel = handle.channel_open_session().await?;
     channel

@@ -1,8 +1,10 @@
 <script lang="ts">
   import { untrack } from 'svelte'
+  import { homeDir, join } from '@tauri-apps/api/path'
+  import { open } from '@tauri-apps/plugin-dialog'
   import Modal from './Modal.svelte'
   import { t } from '../i18n'
-  import type { Session } from './types'
+  import type { AuthMethod, Session } from './types'
 
   let {
     session,
@@ -22,15 +24,34 @@
   let host = $state(initial.host)
   let port = $state(initial.port)
   let username = $state(initial.username)
-  let password = $state('')
-  let clearPassword = $state(false)
+  let method = $state<AuthMethod>(initial.auth.method)
+  let keyPath = $state(initial.auth.keyPath ?? '')
+  let secret = $state('')
+  let clearSecret = $state(false)
   let notes = $state(initial.notes)
   let tags = $state(initial.ui.tags.join(', '))
-  const hasStoredPassword = initial.credentialRef !== null
+  const hasStoredSecret = initial.credentialRef !== null
 
+  const usesSecret = $derived(method === 'password' || method === 'key')
   const valid = $derived(
-    host.trim() !== '' && username.trim() !== '' && Number.isInteger(port) && port >= 1 && port <= 65535,
+    host.trim() !== '' &&
+      username.trim() !== '' &&
+      Number.isInteger(port) &&
+      port >= 1 &&
+      port <= 65535 &&
+      (method !== 'key' || keyPath.trim() !== ''),
   )
+
+  async function browse() {
+    let defaultPath: string | undefined
+    try {
+      defaultPath = await join(await homeDir(), '.ssh')
+    } catch {
+      defaultPath = undefined
+    }
+    const picked = await open({ multiple: false, directory: false, defaultPath, title: t('keyFile') })
+    if (typeof picked === 'string') keyPath = picked
+  }
 
   function submit(e: Event) {
     e.preventDefault()
@@ -41,6 +62,7 @@
       host: host.trim(),
       port,
       username: username.trim(),
+      auth: { method, keyPath: method === 'key' ? keyPath.trim() : null },
       notes,
       ui: {
         ...initial.ui,
@@ -51,7 +73,7 @@
       },
       updatedAt: new Date().toISOString(),
     }
-    onsave(updated, password === '' ? null : password, clearPassword && password === '')
+    onsave(updated, secret === '' ? null : secret, clearSecret && secret === '')
   }
 </script>
 
@@ -64,16 +86,42 @@
     </div>
     <label>{t('user')}<input bind:value={username} required autocomplete="off" /></label>
     <label>
-      {t('password')}
-      <input
-        type="password"
-        bind:value={password}
-        autocomplete="new-password"
-        placeholder={hasStoredPassword ? t('passwordSaved') : t('passwordNone')}
-      />
+      {t('authMethod')}
+      <select bind:value={method}>
+        <option value="password">{t('methodPassword')}</option>
+        <option value="key">{t('methodKey')}</option>
+        <option value="agent">{t('methodAgent')}</option>
+      </select>
     </label>
-    {#if hasStoredPassword}
-      <label class="check"><input type="checkbox" bind:checked={clearPassword} /> {t('clearPassword')}</label>
+    {#if method === 'key'}
+      <label>
+        {t('keyFile')}
+        <span class="row">
+          <input class="grow" bind:value={keyPath} placeholder="~/.ssh/id_ed25519" required />
+          <button type="button" onclick={browse}>{t('browse')}</button>
+        </span>
+      </label>
+    {/if}
+    {#if method === 'agent'}
+      <p class="hint">{t('agentHint')}</p>
+    {/if}
+    {#if usesSecret}
+      <label>
+        {method === 'key' ? t('passphrase') : t('password')}
+        <input
+          type="password"
+          bind:value={secret}
+          autocomplete="new-password"
+          placeholder={hasStoredSecret
+            ? t('secretSaved')
+            : method === 'key'
+              ? t('passphraseNone')
+              : t('passwordNone')}
+        />
+      </label>
+    {/if}
+    {#if hasStoredSecret}
+      <label class="check"><input type="checkbox" bind:checked={clearSecret} /> {t('clearPassword')}</label>
     {/if}
     <label>{t('tags')}<input bind:value={tags} placeholder="PRD, SAP" /></label>
     <label>{t('notes')}<textarea rows="3" bind:value={notes}></textarea></label>
@@ -111,5 +159,10 @@
   }
   .narrow {
     width: 90px;
+  }
+  .hint {
+    margin: 0;
+    font-size: 13px;
+    color: var(--fg-dim);
   }
 </style>

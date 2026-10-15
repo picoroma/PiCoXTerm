@@ -27,6 +27,8 @@
   } = $props()
 
   const PASSWORD_REQUIRED = 'password-required'
+  const PASSPHRASE_REQUIRED = 'passphrase-required'
+  let askKind = $state<'password' | 'passphrase'>('password')
 
   let status = $state<'connecting' | 'connected' | 'closed'>('connecting')
   let error = $state('')
@@ -95,7 +97,8 @@
       })
     } catch (e) {
       status = 'closed'
-      if (String(e) === PASSWORD_REQUIRED) {
+      if (String(e) === PASSWORD_REQUIRED || String(e) === PASSPHRASE_REQUIRED) {
+        askKind = String(e) === PASSPHRASE_REQUIRED ? 'passphrase' : 'password'
         passwordInput = ''
         savePasswordChecked = false
         askPassword = true
@@ -213,9 +216,17 @@
 </div>
 
 {#if askPassword}
-  <Modal title={t('passwordPromptTitle')} onclose={() => (askPassword = false)}>
+  <Modal
+    title={askKind === 'passphrase' ? t('passphrasePromptTitle') : t('passwordPromptTitle')}
+    onclose={() => (askPassword = false)}
+  >
     <form id="pw-form" onsubmit={submitPassword}>
-      <input type="password" bind:value={passwordInput} autocomplete="off" aria-label={t('password')} />
+      <input
+        type="password"
+        bind:value={passwordInput}
+        autocomplete="off"
+        aria-label={askKind === 'passphrase' ? t('passphrase') : t('password')}
+      />
       {#if target.sessionId && savePassword}
         <label class="check"><input type="checkbox" bind:checked={savePasswordChecked} /> {t('savePasswordToo')}</label>
       {/if}

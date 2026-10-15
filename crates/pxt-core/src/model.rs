@@ -34,8 +34,12 @@ pub enum AuthMethod {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Auth {
     pub method: AuthMethod,
+    /// Percorso del file della chiave privata (solo per `method: key`). Mai il contenuto.
+    #[serde(default)]
+    pub key_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -134,6 +138,7 @@ impl Session {
             credential_ref: None,
             auth: Auth {
                 method: AuthMethod::Password,
+                key_path: None,
             },
             jump_hosts: Vec::new(),
             ssh: SshOptions::default(),

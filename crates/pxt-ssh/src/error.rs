@@ -4,6 +4,12 @@ pub enum SshError {
     Connect(String),
     #[error("autenticazione rifiutata dal server")]
     AuthFailed,
+    #[error("la chiave privata è cifrata: serve la passphrase")]
+    PassphraseRequired,
+    #[error("chiave privata non utilizzabile (passphrase errata o formato non valido): {0}")]
+    Key(String),
+    #[error("nessun agent SSH raggiungibile (Pageant o agent OpenSSH non in esecuzione)")]
+    AgentUnavailable,
     #[error("host key rifiutata dall'utente")]
     HostKeyRejected,
     #[error(

@@ -1,0 +1,30 @@
+# testenv
+
+Ambiente di test **solo per sviluppo** (credenziali fittizie, porta su loopback). Non fa parte dell'app.
+
+## Server SSH
+
+```
+docker compose up -d
+```
+
+Ascolta su `127.0.0.1:2222`. Utente `test`, password `test`. Accetta anche le chiavi in `keys/authorized.pub`.
+
+## Chiavi di prova
+
+Le chiavi non sono nel repository (cartella `keys/` ignorata da git). Per generarle:
+
+```
+mkdir keys && cd keys
+ssh-keygen -t ed25519 -N "" -C pxt-test-plain -f id_plain
+ssh-keygen -t ed25519 -N "testpass" -C pxt-test-enc -f id_enc
+cat id_plain.pub id_enc.pub > authorized.pub
+```
+
+`id_plain` è senza passphrase; `id_enc` ha la passphrase `testpass`. Poi `docker compose up -d --force-recreate`.
+
+## Test end-to-end
+
+```
+cargo test -p pxt-ssh --test auth_e2e -- --ignored --test-threads=1
+```

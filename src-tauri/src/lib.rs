@@ -7,7 +7,10 @@ use pxt_core::{
     subtree_ids, AuthMethod, CredentialRef, KeyringSecretProvider, LocalSessionProvider, Protocol,
     Secret, SecretProvider, SessionNode, SessionProvider,
 };
-use pxt_ssh::{ConnectParams, HostKeyInfo, HostKeyVerifier, KnownHosts, Shell, ShellEvent};
+use pxt_ssh::{
+    ConnectParams, Credentials, HostKeyInfo, HostKeyVerifier, KnownHosts, Shell, ShellEvent,
+    SshError,
+};
 use serde::{Deserialize, Serialize};
 use tauri::ipc::{Channel, InvokeResponseBody};
 use tauri::{Manager, State};
@@ -16,6 +19,8 @@ use uuid::Uuid;
 
 /// Codice d'errore (letto dalla UI) quando manca la password e va chiesta all'utente.
 const PASSWORD_REQUIRED: &str = "password-required";
+/// Come sopra, per la passphrase di una chiave privata cifrata.
+const PASSPHRASE_REQUIRED: &str = "passphrase-required";
 
 struct AppState {
     sessions: LocalSessionProvider,
@@ -166,7 +171,7 @@ async fn ssh_connect(
     on_data: Channel<InvokeResponseBody>,
     on_event: Channel<TermEvent>,
 ) -> Result<u64, String> {
-    let (host, port, username, stored_ref) = match request.session_id {
+    let (host, port, username, stored_ref, method, key_path) = match request.session_id {
         Some(id) => {
             let nodes = state.sessions.list().await.map_err(err)?;
             let Some(SessionNode::Session(s)) = nodes.into_iter().find(|n| n.id() == id) else {
@@ -175,31 +180,53 @@ async fn ssh_connect(
             if s.protocol != Protocol::Ssh {
                 return Err("protocollo non ancora supportato".into());
             }
-            if s.auth.method != AuthMethod::Password {
-                return Err("metodo di autenticazione non ancora supportato".into());
-            }
-            (s.host, s.port, s.username, s.credential_ref)
+            (
+                s.host,
+                s.port,
+                s.username,
+                s.credential_ref,
+                s.auth.method,
+                s.auth.key_path,
+            )
         }
         None => (
             request.host.ok_or("host mancante")?,
             request.port.unwrap_or(22),
             request.username.ok_or("utente mancante")?,
             None,
+            AuthMethod::Password,
+            None,
         ),
     };
 
-    let password = match request.password {
-        Some(p) => p,
+    // Segreto fornito ora dall'utente, altrimenti quello nel keyring (se c'è).
+    let secret = match request.password {
+        Some(p) => Some(p),
         None => match &stored_ref {
             Some(r) => state
                 .secrets
                 .get(r)
                 .await
                 .map_err(err)?
-                .map(|s| s.expose().to_string())
-                .ok_or(PASSWORD_REQUIRED)?,
-            None => return Err(PASSWORD_REQUIRED.into()),
+                .map(|s| s.expose().to_string()),
+            None => None,
         },
+    };
+
+    let auth = match method {
+        AuthMethod::Password => Credentials::Password(secret.ok_or(PASSWORD_REQUIRED)?),
+        // La passphrase è opzionale: se la chiave è cifrata la richiede la connessione.
+        AuthMethod::Key => Credentials::Key {
+            path: key_path
+                .filter(|p| !p.trim().is_empty())
+                .ok_or("percorso della chiave privata mancante")?
+                .into(),
+            passphrase: secret,
+        },
+        AuthMethod::Agent => Credentials::Agent,
+        AuthMethod::KeyboardInteractive => {
+            return Err("keyboard-interactive non ancora supportato".into())
+        }
     };
 
     let verifier: HostKeyVerifier = {
@@ -253,7 +280,7 @@ async fn ssh_connect(
             host,
             port,
             username,
-            password,
+            auth,
             cols,
             rows,
             term: "xterm-256color".into(),
@@ -263,7 +290,10 @@ async fn ssh_connect(
         ev_tx,
     )
     .await
-    .map_err(err)?;
+    .map_err(|e| match e {
+        SshError::PassphraseRequired => PASSPHRASE_REQUIRED.to_string(),
+        other => other.to_string(),
+    })?;
 
     let id = state.next_id();
     state.shells.lock().unwrap().insert(id, shell);
@@ -317,6 +347,7 @@ fn hostkey_reply(state: Shared<'_>, req_id: u64, accept: bool) {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_clipboard_manager::init())
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let dir = resolve_data_dir(app)?;
             app.manage(Arc::new(AppState::new(dir)));
