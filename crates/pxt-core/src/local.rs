@@ -227,6 +227,55 @@ mod tests {
         cleanup(&path);
     }
 
+    /// Criterio di accettazione M1: 20 sessioni in 3 cartelle, "chiudo e riapro l'app", tutto al suo posto
+    /// e nessuna password nel file.
+    #[tokio::test]
+    async fn twenty_sessions_in_three_folders_survive_a_restart_without_secrets() {
+        let path = temp_path();
+        let prov = LocalSessionProvider::new(&path);
+        let folders: Vec<Folder> = ["Clienti", "Bulgari", "Personali"]
+            .iter()
+            .map(|n| Folder {
+                id: Uuid::new_v4(),
+                name: (*n).into(),
+                parent_id: None,
+            })
+            .collect();
+        for f in &folders {
+            prov.save(SessionNode::Folder(f.clone())).await.unwrap();
+        }
+        let mut saved = Vec::new();
+        for i in 0..20 {
+            let mut s = Session::new_ssh(&format!("srv{i:02}"), &format!("10.0.0.{i}"), 22, "root");
+            s.parent_id = Some(folders[i % 3].id);
+            s.credential_ref = Some(crate::model::CredentialRef::new_local());
+            saved.push(s.clone());
+            prov.save(SessionNode::Session(Box::new(s))).await.unwrap();
+        }
+
+        // "Riapre l'app": un provider nuovo sullo stesso file
+        let nodes = LocalSessionProvider::new(&path).list().await.unwrap();
+        assert_eq!(nodes.len(), 23);
+        for s in &saved {
+            let found = nodes
+                .iter()
+                .find(|n| n.id() == s.id)
+                .expect("sessione presente");
+            assert_eq!(found.parent_id(), s.parent_id, "stessa cartella");
+        }
+        let per_folder = |f: &Folder| nodes.iter().filter(|n| n.parent_id() == Some(f.id)).count();
+        assert_eq!(
+            folders.iter().map(per_folder).collect::<Vec<_>>(),
+            vec![7, 7, 6]
+        );
+
+        let raw = fs::read_to_string(&path).unwrap().to_lowercase();
+        for forbidden in ["password\":", "passphrase", "secret"] {
+            assert!(!raw.contains(forbidden), "il file contiene {forbidden}");
+        }
+        cleanup(&path);
+    }
+
     #[tokio::test]
     async fn keeps_at_most_five_backups() {
         let path = temp_path();
