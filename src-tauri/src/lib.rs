@@ -36,6 +36,9 @@ enum TermEvent {
     Closed {
         exit: Option<u32>,
     },
+    Cwd {
+        path: String,
+    },
 }
 
 #[tauri::command]
@@ -97,6 +100,9 @@ async fn ssh_connect(
                     if on_data.send(InvokeResponseBody::Raw(d)).is_err() {
                         break;
                     }
+                }
+                ShellEvent::Cwd(path) => {
+                    let _ = on_event.send(TermEvent::Cwd { path });
                 }
                 ShellEvent::Closed(exit) => {
                     let _ = on_event.send(TermEvent::Closed { exit });
@@ -160,6 +166,18 @@ async fn ssh_resize(
 }
 
 #[tauri::command]
+async fn ssh_inject_cwd(
+    state: State<'_, Arc<AppState>>,
+    id: u64,
+    shell: String,
+) -> Result<(), String> {
+    get_shell(&state, id)?
+        .inject_cwd_tracking(&shell)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 async fn ssh_close(state: State<'_, Arc<AppState>>, id: u64) -> Result<(), String> {
     let shell = state.sessions.lock().unwrap().remove(&id);
     if let Some(s) = shell {
@@ -184,6 +202,7 @@ pub fn run() {
             ssh_write,
             ssh_resize,
             ssh_close,
+            ssh_inject_cwd,
             hostkey_reply
         ])
         .run(tauri::generate_context!())

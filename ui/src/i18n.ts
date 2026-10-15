@@ -15,6 +15,8 @@ const it: Dict = {
   cancel: 'Annulla',
   fingerprint: 'Fingerprint',
   keyType: 'Tipo di chiave',
+  injectCwd: 'Attiva tracciamento cwd',
+  cwd: 'Directory',
 }
 
 const en: Dict = {
@@ -32,6 +34,8 @@ const en: Dict = {
   cancel: 'Cancel',
   fingerprint: 'Fingerprint',
   keyType: 'Key type',
+  injectCwd: 'Enable cwd tracking',
+  cwd: 'Directory',
 }
 
 const dicts: Record<string, Dict> = { it, en }

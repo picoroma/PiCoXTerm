@@ -1,7 +1,9 @@
 //! Connessione SSH, canale shell, known_hosts. Non dipende da Tauri.
 
 mod error;
+mod inject;
 mod known_hosts;
+mod osc7;
 mod shell;
 
 pub use error::SshError;

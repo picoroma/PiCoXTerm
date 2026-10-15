@@ -8,6 +8,7 @@ use russh::keys::{HashAlg, PublicKeyOrCertificate};
 use russh::ChannelMsg;
 use tokio::sync::mpsc;
 
+use crate::osc7::Osc7Scanner;
 use crate::{HostKeyStatus, KnownHosts, SshError};
 
 pub struct ConnectParams {
@@ -35,10 +36,12 @@ pub type HostKeyVerifier =
 #[derive(Debug)]
 pub enum ShellEvent {
     Data(Vec<u8>),
+    /// Directory corrente comunicata dalla shell remota via OSC 7.
+    Cwd(String),
     Closed(Option<u32>),
 }
 
-enum Cmd {
+pub(crate) enum Cmd {
     Write(Vec<u8>),
     Resize(u32, u32),
     Close,
@@ -46,7 +49,7 @@ enum Cmd {
 
 #[derive(Clone)]
 pub struct Shell {
-    tx: mpsc::Sender<Cmd>,
+    pub(crate) tx: mpsc::Sender<Cmd>,
 }
 
 impl Shell {
@@ -154,10 +157,14 @@ pub async fn connect_shell(
     tokio::spawn(async move {
         let _keep_alive = handle; // chiudere il task chiude la connessione
         let mut exit = None;
+        let mut osc7 = Osc7Scanner::new();
         loop {
             tokio::select! {
                 msg = channel.wait() => match msg {
                     Some(ChannelMsg::Data { data }) => {
+                        for path in osc7.feed(&data) {
+                            let _ = events.send(ShellEvent::Cwd(path)).await;
+                        }
                         if events.send(ShellEvent::Data(data.to_vec())).await.is_err() { break; }
                     }
                     Some(ChannelMsg::ExtendedData { data, .. }) => {

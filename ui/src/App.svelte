@@ -8,6 +8,7 @@
   type TermEvent =
     | { type: 'hostKey'; reqId: number; host: string; port: number; keyType: string; fingerprint: string }
     | { type: 'closed'; exit: number | null }
+    | { type: 'cwd'; path: string }
 
   let host = $state('')
   let port = $state(22)
@@ -15,6 +16,8 @@
   let password = $state('')
   let status = $state<'idle' | 'connecting' | 'connected'>('idle')
   let error = $state('')
+  let cwd = $state('')
+  let injectShell = $state('bash')
   let hostKeyPrompt = $state<Extract<TermEvent, { type: 'hostKey' }> | null>(null)
 
   let termEl: HTMLDivElement
@@ -56,6 +59,8 @@
     onEvent.onmessage = (ev) => {
       if (ev.type === 'hostKey') {
         hostKeyPrompt = ev
+      } else if (ev.type === 'cwd') {
+        cwd = ev.path
       } else if (ev.type === 'closed') {
         term?.write(`\r\n\x1b[33m[${t('closed')}]\x1b[0m\r\n`)
         status = 'idle'
@@ -103,6 +108,11 @@
     await invoke('hostkey_reply', { reqId, accept })
   }
 
+  async function injectCwd() {
+    if (sessionId !== null) await invoke('ssh_inject_cwd', { id: sessionId, shell: injectShell })
+    term?.focus()
+  }
+
   async function disconnect() {
     if (sessionId !== null) await invoke('ssh_close', { id: sessionId })
   }
@@ -115,6 +125,11 @@
     <input placeholder={t('user')} bind:value={user} required disabled={status !== 'idle'} />
     <input type="password" placeholder={t('password')} bind:value={password} disabled={status !== 'idle'} />
     {#if status === 'connected'}
+      <select bind:value={injectShell} aria-label="shell">
+        <option>bash</option>
+        <option>tcsh</option>
+      </select>
+      <button type="button" onclick={injectCwd}>{t('injectCwd')}</button>
       <button type="button" onclick={disconnect}>{t('disconnect')}</button>
     {:else}
       <button type="submit" disabled={status === 'connecting'}>
@@ -125,6 +140,7 @@
   {#if error}<div class="error">{error}</div>{/if}
 
   <div class="term" bind:this={termEl}></div>
+  <div class="status">{t('cwd')}: {cwd || '—'}</div>
 
   {#if hostKeyPrompt}
     <div class="backdrop">
@@ -164,6 +180,13 @@
     padding: 8px;
     background: #2b2b2b;
   }
+  .status {
+    padding: 4px 8px;
+    background: #2b2b2b;
+    font-family: Consolas, monospace;
+    font-size: 13px;
+  }
+  select,
   input,
   button {
     padding: 6px 10px;
