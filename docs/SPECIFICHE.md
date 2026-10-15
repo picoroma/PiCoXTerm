@@ -349,7 +349,36 @@ Le applicazioni grafiche remote (per esempio SAPinst, `hdbsetup`, gli installer 
 | 2 | **Avvio guidato** di un X server già installato: rilevamento e avvio con parametri sicuri (accesso solo locale) | Del server X esterno | Nessun binario incluso nel pacchetto |
 | 3 | **X server integrato** | Sì: va dichiarata un'eccezione esplicita a SEC-01, come per il port forwarding (6.6) | Da decidere solo se 1 e 2 non bastano. Preferire socket Unix o named pipe alla porta TCP; costo di realizzazione molto alto; disattivato di default e controllato da policy |
 
+**Come lo risolve MobaXterm** (dalla sua documentazione ufficiale, analizzata il 15 ottobre 2026):
+
+| Aspetto | MobaXterm |
+|---|---|
+| Server X | **Integrato nell'eseguibile**, basato su Xorg compilato per Windows; supporta OpenGL, Composite, Randr e XDMCP |
+| Forwarding | Casella **"X11-Forwarding"** nella sessione SSH: reindirizzamento automatico del `DISPLAY` nel canale SSH. Il traffico è cifrato, comprimibile e non richiede altre porte o regole firewall. Funziona anche attraverso un jump host |
+| `DISPLAY` | Impostato in automatico; sul server compare come `localhost:10.0` (display virtuale creato da sshd) |
+| Avvio | Opzione "avvia l'X server all'apertura", scorciatoia Ctrl+Maiusc+X, icona di stato; `-noX` lo disattiva |
+| Impostazioni X11 | Motore di rendering, tastiera, monitor, *display offset*, appunti (disattivato / attivo / senza copia-su-selezione), accelerazione OpenGL, modalità finestra (multiwindow, finestra singola, schermo intero, con window manager integrato Fvwm o Dwm) |
+| Sicurezza | "X11 remote access": **Restricted** (controllo accessi, host abilitati con `xhost`) oppure **Full** (nessun controllo: le applicazioni remote possono ascoltare e simulare tasti). Le connessioni inoltrate via SSH passano senza avvisi |
+| **Punto critico** | Il server X **ascolta su tutte le interfacce di rete** (127.0.0.1 e ogni scheda). È proprio il comportamento che gli strumenti di sicurezza aziendali segnalano |
+
+Cosa riprendere: la casella per sessione, il `DISPLAY` automatico, lo stato visibile del server X, gli appunti condivisi, le modalità di finestra, il funzionamento attraverso i jump host. Cosa cambiare: l'ascolto va limitato a **loopback o a un canale locale** (socket Unix / named pipe) con autenticazione obbligatoria, mai su tutte le interfacce.
+
+**Architettura consigliata per la fase 3:** l'X server non entra nell'eseguibile principale. Diventa un **componente opzionale separato** (proprio binario, firmato, con propria approvazione IT), avviato e controllato da PiCoXterm. L'app principale resta così senza porte in ascolto e verificabile, e chi non usa X11 non porta il rischio. Le fasi 1 e 2 danno già la stessa comodità d'uso con un X server esterno.
+
 Requisiti comuni: autenticazione X11 con cookie `MIT-MAGIC-COOKIE-1` generato per sessione, mai accesso non autenticato; nessuna esposizione oltre il loopback; tutto registrato nell'audit (5.2). Resta valido SEC-08: nessuna funzione "pericolosa" attiva senza una scelta esplicita dell'utente.
+
+### 6.8 Strumenti di rete di diagnosi (backlog, non prioritario)
+
+Richiesta dell'utente (15 ottobre 2026, D-17): ping e verifica dell'apertura delle porte. Perimetro proposto, con strumenti di **diagnosi** e non di attacco:
+
+| Strumento | Come funziona | Porte in ascolto | Note |
+|---|---|---|---|
+| **Ping** | ICMP (su Windows con l'API di sistema, senza amministratore) con ripiego su prova di connessione TCP | Nessuna | Esito con tempi minimo, medio e massimo |
+| **Verifica di una porta o di un intervallo** | Tentativo di connessione TCP in uscita dal PC verso host e porta (o intervallo, per esempio 3200-3299) | Nessuna | Raggiungibile anche **dal punto di vista di un server**: la prova parte dal jump host o dal server tramite `direct-tcpip`, utile per verificare i firewall tra due server |
+| **Porte in ascolto su un server** | Esegue `ss -tlnp` (ripiego `netstat`) sul server tramite una sessione SSH già aperta e mostra una tabella (porta, indirizzo, processo) | Nessuna | È una *lettura* della configurazione del server, non una scansione |
+| Scansione di tutte le 65.535 porte di un host | Possibile, ma è il caso percepito come strumento offensivo | Nessuna | Da decidere (vedi domanda aperta 7): solo su host che hanno una sessione salvata, con limite di velocità, avviso e registrazione nell'audit |
+
+Regole comuni: tutto in uscita (SEC-01), interruttore `allowNetworkTools` in `policy.json` (default consentito solo per ping e porta singola), ogni uso registrato nel log di audit (5.2), limiti di velocità e di numero di porte per richiesta.
 
 ---
 
@@ -554,4 +583,4 @@ Opzione `sshTunnelVia`: il backend apre un canale `direct-tcpip` su una connessi
 4. Il port forwarding locale (6.6) serve davvero per SAP GUI/HANA Studio, o si usa già un'altra via (VPN, Devolutions Gateway)?
 5. FTP in modalità attiva: si può escludere del tutto?
 6. X11 (6.7): per quali applicazioni serve davvero (SAPinst, `hdbsetup`, installer Oracle, altro) e quale X server esterno si usa già (VcXsrv, X410, altro)?
-7. Strumenti di rete (D-17): quali servono nella pratica (per esempio ping, traceroute, verifica di una porta)?
+7. Strumenti di rete (D-17, 6.8): "tutte le porte in ascolto su un dato server" significa la **lista delle porte in ascolto sul server** (letta via SSH, senza scansione) oppure la **scansione di tutte le porte** dall'esterno? La prima è sicura e prevista; la seconda richiede cautele.
