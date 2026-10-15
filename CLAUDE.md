@@ -46,7 +46,11 @@ Documenti di riferimento (leggerli prima di iniziare una milestone):
 
 ## Stato attuale
 
-- M0 (spike) concluso con esito **go**: vedi `docs/spike-m0.md`. Decisioni D-10..D-13 registrate.
-- Milestone corrente: **M1 (SSH a schede e sessioni locali)**. Esiste già: connessione SSH con password, terminale xterm.js, known_hosts con dialogo host key, tracciamento cwd (OSC 7) per bash/tcsh, copia/incolla.
-- Gotcha: con `cargo build` diretto serve la feature `custom-protocol` (attiva di default); il backend crittografico di russh è `ring` (D-11); nei comandi shell con heredoc i backslash possono essere alterati, preferire il tool Write per file con escape.
-- Prossimo passo: modello dati e provider di sessioni/segreti in `pxt-core`.
+- M0 (spike) concluso con esito **go**: vedi `docs/spike-m0.md`. Decisioni D-10..D-18 registrate in `docs/SPECIFICHE.md`.
+- Milestone corrente: **M1 (SSH a schede e sessioni locali)**, quasi completa. Fatto: SSH con password, chiave (OpenSSH/ppk) e agent; jump host a catena; host key SEC-03/SEC-04 con gestione di `known_hosts`; albero sessioni con keyring, duplica, prova connessione, quick connect; impostazioni, temi e aspetto per sessione; ricerca e zoom nel terminale; log di audit; esporta/importa sessioni; tracciamento cwd (OSC 7).
+- Ancora da fare in M1: verifica uno a uno dei criteri di accettazione della roadmap; `keyboard-interactive` (non prioritario); `testenv/` con utenti ksh/zsh/tcsh, FTP TLS, MinIO.
+- Backlog deciso: X11 forwarding e X server a fasi (D-16, sezione 6.7); strumenti di rete di diagnosi (D-17, sezione 6.8).
+- Repository: `github.com/picoroma/PiCoXTerm` (privato). Il push avviene solo quando lo chiede l'utente. CI in `.github/workflows/ci.yml`, policy dipendenze in `deny.toml`.
+- Build di prova: sempre `target/release/picoxterm.exe` (niente cartelle "draft"); se l'exe è aperto Windows blocca la sostituzione, quindi va chiuso. L'interfaccia si prova anche nel browser con il backend finto di `ui/src/dev/mock-tauri.ts`.
+- Gotcha: con `cargo build` diretto serve la feature `custom-protocol` (attiva di default); il backend crittografico di russh è `ring` (D-11); nei comandi shell con heredoc i backslash possono essere alterati, preferire il tool Write per file con escape; `cargo fmt` riformatta e può invalidare patch testuali successive.
+- Prossimo passo: da concordare (rifiniture di M1 o avvio di M2, il pannello SFTP).
