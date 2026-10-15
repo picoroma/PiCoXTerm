@@ -67,7 +67,7 @@ pub(crate) enum Cmd {
 pub struct Shell {
     pub(crate) tx: mpsc::Sender<Cmd>,
     /// Connessione condivisa: serve ad aprire altri canali (SFTP) senza una seconda autenticazione.
-    handle: Arc<client::Handle<Client>>,
+    pub(crate) handle: Arc<client::Handle<Client>>,
 }
 
 impl Shell {
@@ -98,7 +98,7 @@ impl Shell {
     }
 }
 
-struct Client {
+pub(crate) struct Client {
     host: String,
     port: u16,
     known: KnownHosts,

@@ -16,3 +16,12 @@ services:
       - ./init:/custom-cont-init.d:ro
     ports:
       - "127.0.0.1:2222:2222"
+
+  # Secondo server, costruito da noi, con utenti che usano shell diverse (bashuser, zshuser, tcshuser, ashuser).
+  # Serve ai test del tracciamento della directory: l'immagine sopra fa girare sshd senza privilegi
+  # e non permette di cambiare utente.
+  ssh-shells:
+    build: ./shells
+    container_name: pxt-test-shells
+    ports:
+      - "127.0.0.1:2223:2222"

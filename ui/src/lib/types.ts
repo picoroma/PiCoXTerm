@@ -131,3 +131,11 @@ export interface SftpEntry {
   uid: number | null
   gid: number | null
 }
+
+/** Stato del tracciamento della directory del terminale (OSC 7) di una scheda. */
+export interface TrackingInfo {
+  /** `pending` finché non si sa, poi `active`, `unsupported` (shell non gestita), `off` o `error`. */
+  state: 'pending' | 'active' | 'unsupported' | 'off' | 'error'
+  shell: string | null
+  message: string | null
+}

@@ -4,9 +4,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use pxt_core::{
-    subtree_ids, transfer, AuditEvent, AuditLog, AuthMethod, CredentialRef, KeyringSecretProvider,
-    LocalSessionProvider, LocalSettings, Outcome, Protocol, Secret, SecretProvider, Session,
-    SessionNode, SessionProvider, Settings,
+    subtree_ids, transfer, AuditEvent, AuditLog, AuthMethod, CredentialRef, FollowCwd,
+    KeyringSecretProvider, LocalSessionProvider, LocalSettings, Outcome, Protocol, Secret,
+    SecretProvider, Session, SessionNode, SessionProvider, Settings,
 };
 use pxt_fs::{Entry, RemoteFs, SftpFs};
 use pxt_ssh::{
@@ -141,6 +141,13 @@ enum TermEvent {
         port: u16,
         expected: String,
         got: String,
+    },
+    /// Esito dell'attivazione del tracciamento della directory del terminale.
+    Tracking {
+        /// `active`, `unsupported` (shell non gestita), `off` (disattivato nella sessione), `error`.
+        state: &'static str,
+        shell: Option<String>,
+        message: Option<String>,
     },
     Closed {
         exit: Option<u32>,
@@ -312,6 +319,7 @@ struct Endpoint {
     credential_ref: Option<CredentialRef>,
     method: AuthMethod,
     key_path: Option<String>,
+    follow_cwd: FollowCwd,
 }
 
 impl Endpoint {
@@ -323,6 +331,7 @@ impl Endpoint {
             credential_ref: s.credential_ref.clone(),
             method: s.auth.method,
             key_path: s.auth.key_path.clone(),
+            follow_cwd: s.ssh.follow_cwd,
         }
     }
 }
@@ -572,6 +581,7 @@ async fn ssh_connect(
                 credential_ref: None,
                 method: AuthMethod::Password,
                 key_path: None,
+                follow_cwd: FollowCwd::Auto,
             },
             Vec::new(),
         ),
@@ -719,8 +729,54 @@ async fn ssh_connect(
     };
 
     let id = state.next_id();
-    state.shells.lock().unwrap().insert(id, shell);
+    state.shells.lock().unwrap().insert(id, shell.clone());
+
+    // Tracciamento della directory (6.4): in automatico, salvo `followCwd` = `off` / `osc7-only`.
+    let auto = dest.follow_cwd == FollowCwd::Auto;
+    let tracking_events = on_event_for_errors;
+    tauri::async_runtime::spawn(async move {
+        let event = if auto {
+            // Il tempo che la shell mostri il primo prompt, così la riga iniettata viene letta subito.
+            tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+            tracking_event(shell.enable_cwd_tracking().await)
+        } else {
+            TermEvent::Tracking {
+                state: "off",
+                shell: None,
+                message: None,
+            }
+        };
+        let _ = tracking_events.send(event);
+    });
     Ok(id)
+}
+
+/// Traduce l'esito dell'attivazione del tracciamento in un evento per la UI.
+fn tracking_event(result: Result<String, SshError>) -> TermEvent {
+    match result {
+        Ok(shell) => TermEvent::Tracking {
+            state: "active",
+            shell: Some(shell),
+            message: None,
+        },
+        Err(SshError::UnsupportedShell(shell)) => TermEvent::Tracking {
+            state: "unsupported",
+            shell: Some(shell),
+            message: None,
+        },
+        Err(e) => TermEvent::Tracking {
+            state: "error",
+            shell: None,
+            message: Some(e.to_string()),
+        },
+    }
+}
+
+/// Attiva a mano il tracciamento della directory (rileva la shell e inietta la riga).
+#[tauri::command]
+async fn ssh_enable_cwd_tracking(state: Shared<'_>, id: u64) -> Result<TermEvent, String> {
+    let shell = get_shell(&state, id)?;
+    Ok(tracking_event(shell.enable_cwd_tracking().await))
 }
 
 fn get_shell(state: &AppState, id: u64) -> Result<Shell, String> {
@@ -876,6 +932,7 @@ pub fn run() {
             sftp_home,
             sftp_list,
             ssh_inject_cwd,
+            ssh_enable_cwd_tracking,
             hostkey_reply,
             known_hosts_list,
             known_hosts_remove

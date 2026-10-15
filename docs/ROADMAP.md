@@ -92,7 +92,7 @@ Attività:
 4. Operazioni: elenco, crea cartella, rinomina, elimina, chmod, file nascosti, barra del percorso, preferiti.
 5. Drag & drop da e verso l'Esplora risorse / Finder.
 6. Coda dei trasferimenti: concorrenza, avanzamento, annulla, riprova, gestione dei conflitti, ripresa, streaming.
-7. "Apri con l'editor di sistema" con ricaricamento al salvataggio.
+7. **Editor integrato** (clic destro, Modifica; D-19) e, in alternativa, "Apri con l'editor di sistema" con ricaricamento al salvataggio.
 
 **Criteri di accettazione:**
 - Con `cd /usr/sap/<SID>/SYS/profile` nel terminale, il pannello si aggiorna entro 500 ms, con bash e con tcsh.

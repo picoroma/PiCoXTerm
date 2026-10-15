@@ -54,7 +54,7 @@ Queste funzioni **non verranno implementate**, salvo una decisione esplicita reg
 | Shell locale, Cygwin, Busybox, plugin | Binari non controllati dall'EDR |
 | X server integrato | Apre porte in ascolto. **Rinviato, non scartato** (D-16): prima l'X11 forwarding verso un X server esterno, vedi 6.7 |
 | Telnet, rlogin, Mosh, seriale | Protocolli in chiaro o fuori perimetro |
-| Editor di testo integrato | Si usa l'editor di sistema (vedi 7.6) |
+| Editor di testo integrato | **Ammesso, in forma ridotta** (D-19, vedi 7.6): solo per file di testo di dimensione limitata. Resta disponibile anche l'editor di sistema |
 | Macro e registrazione di tasti | Fuori perimetro v1 |
 | Vault di password condiviso fatto in casa | La condivisione arriva tramite RDM (M6) |
 
@@ -402,6 +402,7 @@ Un unico componente UI, usato in due modalità:
 | Permessi (chmod) | Sì | Se il server lo supporta | No |
 | Proprietario/gruppo visibili | Sì | Se disponibili | No |
 | Symlink | Sì | No | No |
+| Modifica con l'**editor integrato** (clic destro, Modifica) | Sì | Sì | Sì |
 | Apri con l'editor di sistema e ricarica al salvataggio | Sì | Sì | Sì |
 
 ### 7.3 Coda dei trasferimenti
@@ -430,7 +431,17 @@ Un unico componente UI, usato in due modalità:
 
 ### 7.6 Modifica dei file remoti
 
-"Apri" scarica il file in una cartella temporanea dedicata, lo apre con l'editor associato del sistema e osserva il file: al salvataggio chiede (o esegue, se configurato) il caricamento. Alla chiusura della sessione i file temporanei vengono eliminati.
+**Editor integrato (D-19).** Clic destro su un file di testo del pannello, voce **Modifica**: il file si apre in una scheda dell'editor di PiCoXterm, come in MobaXterm. Vantaggio di sicurezza rispetto all'editor di sistema: il contenuto resta **in memoria** e non viene scritto in una cartella temporanea sul disco (utile per profili SAP, file di configurazione con parametri sensibili). Caratteristiche:
+
+- evidenziazione della sintassi per i formati comuni (shell, YAML, JSON, XML, INI/conf, Python, SQL, log), numeri di riga, cerca e sostituisci, annulla e ripeti, a capo automatico a scelta;
+- salvataggio con Ctrl+S: prima di scrivere si controlla che il file remoto non sia cambiato dall'apertura (data e dimensione); se è cambiato si chiede cosa fare (sovrascrivi, scarica la versione nuova, annulla);
+- conservazione di codifica (UTF-8 con ripiego su altre, rilevata) e fine riga (LF o CRLF), permessi e proprietario del file;
+- indicatore di modifiche non salvate e conferma alla chiusura;
+- **limite di dimensione** (di partenza 5 MiB) e rifiuto dei file binari: oltre il limite si propone il download oppure l'editor di sistema;
+- eccezione **motivata e limitata** alla regola "mai un file intero in memoria" (CLAUDE.md, regola 7): vale solo per l'editor, solo sotto il limite, mai per i trasferimenti;
+- futuro: modifica come altro utente (sudo), vedi backlog "SFTP via sudo".
+
+**Editor di sistema.** "Apri" scarica il file in una cartella temporanea dedicata, lo apre con l'editor associato del sistema e osserva il file: al salvataggio chiede (o esegue, se configurato) il caricamento. Alla chiusura della sessione i file temporanei vengono eliminati.
 
 ---
 
@@ -591,6 +602,7 @@ Opzione `sshTunnelVia`: il backend apre un canale `direct-tcpip` su una connessi
 | D-16 | 2026-10-15 | **X server**: l'esclusione (2.2) diventa un **rinvio**. Si farà a fasi dopo la v1 (6.7): 1) X11 forwarding verso un X server esterno; 2) avvio guidato di un X server installato; 3) X server integrato solo se necessario, con eccezione esplicita a SEC-01 | Richiesta dell'utente (comodo per le applicazioni grafiche SAP); la fase 1 non apre porte, le successive richiedono cautele |
 | D-17 | 2026-10-15 | **Strumenti di rete** (diagnosi): da rivalutare dopo la v1; per ora restano esclusi. Quando se ne parlerà si sceglieranno singoli strumenti di diagnosi utili e non offensivi, ciascuno con una decisione propria | Richiesta dell'utente ("potrebbero tornare utili"); evitare di tornare agli strumenti percepiti come offensivi |
 | D-18 | 2026-10-15 | **Rischio accettato** su RUSTSEC-2023-0071 ("Marvin attack", crate `rsa`, usato da russh per le chiavi RSA; nessuna versione corretta disponibile). Si resta sul crate perché le chiavi RSA sono ancora comuni (host key e chiavi utente). Mitigazione: consigliare ed25519/ECDSA; riesame a ogni aggiornamento di russh. Ignorato in `deny.toml` con motivazione | Il rischio richiede osservazioni di timing sulle operazioni con chiave privata RSA; per un client desktop che si autentica con la propria chiave è basso, ma va dichiarato (SEC-12) |
+| D-19 | 2026-10-15 | **Editor di testo integrato** per i file remoti, in forma ridotta (7.6): l'esclusione in 2.2 viene tolta. Il file resta in memoria (niente file temporanei), con limite di dimensione e controllo di modifica concorrente. Eccezione limitata alla regola 7 (nessun file intero in memoria), solo per l'editor e sotto il limite | Richiesta dell'utente (come in MobaXterm); riduce i file in chiaro su disco rispetto all'editor di sistema |
 | D-13 | 2026-10-15 | Esito spike M0: **go** sullo stack. Rischio aperto su NFR-03 (memoria, ~273 MB a riposo per via di WebView2) | Vedi `docs/spike-m0.md` |
 
 ---

@@ -64,6 +64,7 @@ const handlers: Record<string, (args: any) => unknown> = {
     return copy
   },
   ssh_resize: () => {},
+  ssh_enable_cwd_tracking: () => ({ type: 'tracking', state: 'active', shell: '/bin/bash', message: null }),
   sftp_home: () => '/home/u',
   sftp_list: ({ path }) => {
     if (!(path in fakeFs)) throw `percorso non trovato: ${path}`
@@ -99,9 +100,11 @@ const handlers: Record<string, (args: any) => unknown> = {
   },
   // host "newhost" = chiave sconosciuta; "changed" = chiave cambiata; altro = chiede la password
   ssh_connect: async ({ request, onEvent }) => {
-    if (request.host === 'srv') {
+    if (request.host === 'srv' || request.host === 'srv-ash') {
       ;(window as any).__lastEvent = onEvent
-      return 7
+      const unsupported = request.host === 'srv-ash'
+      setTimeout(() => emit(onEvent, unsupported ? { type: 'tracking', state: 'unsupported', shell: '/bin/ash', message: null } : { type: 'tracking', state: 'active', shell: '/bin/bash', message: null }), 400)
+      return unsupported ? 8 : 7
     }
     if (request.host === 'changed') {
       emit(onEvent, { type: 'hostKeyChanged', host: 'changed', port: 22, expected: 'SHA256:vecchia1111', got: 'SHA256:nuova2222' })

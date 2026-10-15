@@ -2,7 +2,7 @@
   import { untrack } from 'svelte'
   import { invoke } from '@tauri-apps/api/core'
   import { t } from '../i18n'
-  import type { SftpEntry } from './types'
+  import type { SftpEntry, TrackingInfo } from './types'
 
   let {
     connId,
@@ -10,6 +10,8 @@
     liveIds,
     wide = false,
     onwiden,
+    tracking,
+    onenabletracking,
   }: {
     /** Connessione SSH della scheda attiva (null se non c'è o non è collegata). */
     connId: number | null
@@ -21,6 +23,10 @@
     wide?: boolean
     /** Allarga o ripristina la sidebar. */
     onwiden?: () => void
+    /** Stato del tracciamento della directory del terminale. */
+    tracking: TrackingInfo
+    /** Attiva a mano il tracciamento. */
+    onenabletracking: () => void
   } = $props()
 
   interface PanelState {
@@ -252,6 +258,21 @@
   {#if connId === null || !cur}
     <p class="empty">{t('sftpHint')}</p>
   {:else}
+    {#if follow && tracking.state !== 'active'}
+      <div class="notice" role="status">
+        {#if tracking.state === 'pending'}
+          {t('trackingPending')}
+        {:else if tracking.state === 'unsupported'}
+          {t('trackingUnsupported', { shell: (tracking.shell ?? '').split('/').pop() ?? '' })}
+        {:else if tracking.state === 'off'}
+          {t('trackingOff')}
+          <button type="button" onclick={onenabletracking}>{t('injectCwd')}</button>
+        {:else}
+          {t('trackingError')}{tracking.message ? `: ${tracking.message}` : ''}
+          <button type="button" onclick={onenabletracking}>{t('retry')}</button>
+        {/if}
+      </div>
+    {/if}
     <form class="pathbar" onsubmit={submitPath}>
       <input bind:value={pathInput} aria-label={t('path')} spellcheck="false" onkeydown={(e) => e.key === 'Escape' && (pathInput = cur.path)} />
     </form>
@@ -402,6 +423,19 @@
     margin: 0;
     color: var(--fg-dim);
     font-size: 12px;
+  }
+  .notice {
+    margin: 0 8px 6px;
+    padding: 6px 8px;
+    border-radius: 4px;
+    background: color-mix(in srgb, #f0ad4e 22%, transparent);
+    border: 1px solid #f0ad4e;
+    font-size: 12px;
+    word-break: break-word;
+  }
+  .notice button {
+    margin-left: 6px;
+    padding: 1px 8px;
   }
   .error {
     margin: 0 8px 6px;

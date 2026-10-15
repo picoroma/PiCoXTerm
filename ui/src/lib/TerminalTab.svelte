@@ -10,13 +10,14 @@
   import { t } from '../i18n'
   import { settings } from './settings.svelte'
   import { terminalThemes } from './themes'
-  import type { SessionUi, Target } from './types'
+  import type { SessionUi, Target, TrackingInfo } from './types'
 
   type TermEvent =
     | { type: 'hostKey'; reqId: number; host: string; port: number; keyType: string; fingerprint: string }
     | { type: 'hostKeyChanged'; host: string; port: number; expected: string; got: string }
     | { type: 'closed'; exit: number | null }
     | { type: 'cwd'; path: string }
+    | { type: 'tracking'; state: TrackingInfo['state']; shell: string | null; message: string | null }
 
   let {
     target,
@@ -27,6 +28,7 @@
     connId = $bindable(null),
     status = $bindable('connecting'),
     cwd = $bindable(''),
+    tracking = $bindable({ state: 'pending', shell: null, message: null }),
   }: {
     target: Target
     active: boolean
@@ -39,6 +41,8 @@
     status?: 'connecting' | 'connected' | 'closed'
     /** Directory corrente del terminale (OSC 7). */
     cwd?: string
+    /** Stato del tracciamento della directory, per il pannello SFTP. */
+    tracking?: TrackingInfo
     /** Apre la gestione delle host key salvate (impostazioni). */
     onmanagehostkeys?: () => void
   } = $props()
@@ -49,7 +53,6 @@
   let askKind = $state<'password' | 'passphrase'>('password')
 
   let error = $state('')
-  let injectShell = $state('bash')
   let hostKeyPrompt = $state<Extract<TermEvent, { type: 'hostKey' }> | null>(null)
   let hostKeyChanged = $state<Extract<TermEvent, { type: 'hostKeyChanged' }> | null>(null)
   let pendingPaste = $state<string | null>(null)
@@ -140,6 +143,7 @@
     error = ''
     status = 'connecting'
     cwd = ''
+    tracking = { state: 'pending', shell: null, message: null }
     const onData = new Channel<ArrayBuffer | number[]>()
     onData.onmessage = (buf) => term.write(new Uint8Array(buf))
     const onEvent = new Channel<TermEvent>()
@@ -147,6 +151,7 @@
       if (ev.type === 'hostKey') hostKeyPrompt = ev
       else if (ev.type === 'hostKeyChanged') hostKeyChanged = ev
       else if (ev.type === 'cwd') cwd = ev.path
+      else if (ev.type === 'tracking') tracking = { state: ev.state, shell: ev.shell, message: ev.message }
       else if (ev.type === 'closed') {
         term.write(`\r\n\x1b[33m[${t('closed')}]\x1b[0m\r\n`)
         status = 'closed'
@@ -206,8 +211,16 @@
     await invoke('hostkey_reply', { reqId, decision })
   }
 
-  async function injectCwd() {
-    if (connId !== null) await invoke('ssh_inject_cwd', { id: connId, shell: injectShell })
+  /** Attiva a mano il tracciamento: il backend rileva la shell e inietta la riga adatta. */
+  async function enableTracking() {
+    if (connId === null) return
+    tracking = { state: 'pending', shell: null, message: null }
+    try {
+      const r = await invoke<Extract<TermEvent, { type: 'tracking' }>>('ssh_enable_cwd_tracking', { id: connId })
+      tracking = { state: r.state, shell: r.shell, message: r.message }
+    } catch (e) {
+      tracking = { state: 'error', shell: null, message: String(e) }
+    }
     term.focus()
   }
 
@@ -298,11 +311,11 @@
 <div class="tab" class:hidden={!active}>
   <div class="tools">
     {#if status === 'connected'}
-      <select bind:value={injectShell} aria-label="shell">
-        <option>bash</option>
-        <option>tcsh</option>
-      </select>
-      <button type="button" onclick={injectCwd}>{t('injectCwd')}</button>
+      {#if tracking.state === 'active'}
+        <span class="dim" title={t('trackingActiveHint')}>📍 {t('trackingActive', { shell: (tracking.shell ?? '').split('/').pop() ?? '' })}</span>
+      {:else if tracking.state !== 'pending'}
+        <button type="button" onclick={enableTracking}>{t('injectCwd')}</button>
+      {/if}
       <button type="button" onclick={disconnect}>{t('disconnect')}</button>
     {:else if status === 'connecting'}
       <span class="dim">{t('connecting')}</span>

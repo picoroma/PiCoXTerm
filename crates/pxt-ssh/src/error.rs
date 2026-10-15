@@ -26,6 +26,8 @@ pub enum SshError {
     UnsupportedHostKey,
     #[error("il server non consente l'inoltro TCP verso il salto successivo (AllowTcpForwarding)")]
     ForwardingDenied,
+    #[error("shell non supportata per il tracciamento della directory: {0}")]
+    UnsupportedShell(String),
     #[error("nessuna risposta entro {0} secondi")]
     Timeout(u64),
     #[error("{host}: {source}")]

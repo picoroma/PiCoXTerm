@@ -8,7 +8,8 @@
   import SftpPanel from './lib/SftpPanel.svelte'
   import { loadSettings } from './lib/settings.svelte'
   import { deleteNode, duplicateSession, listNodes, saveNode } from './lib/api'
-  import { newFolder, newSession, type Folder, type Session, type SessionNode, type Target, type Uuid } from './lib/types'
+  import { invoke } from '@tauri-apps/api/core'
+  import { newFolder, newSession, type TrackingInfo, type Folder, type Session, type SessionNode, type Target, type Uuid } from './lib/types'
   import { t } from './i18n'
 
   interface Tab {
@@ -19,6 +20,7 @@
     connId: number | null
     cwd: string
     status: 'connecting' | 'connected' | 'closed'
+    tracking: TrackingInfo
   }
 
   let nodes = $state<SessionNode[]>([])
@@ -98,7 +100,7 @@
   })
 
   function openTab(title: string, target: Target) {
-    const tab: Tab = { key: nextKey++, title, target, connId: null, cwd: '', status: 'connecting' }
+    const tab: Tab = { key: nextKey++, title, target, connId: null, cwd: '', status: 'connecting', tracking: { state: 'pending', shell: null, message: null } }
     tabs.push(tab)
     activeKey = tab.key
   }
@@ -177,6 +179,22 @@
     await run(() => saveNode(moved))
   }
 
+  /** Attiva a mano il tracciamento della directory nella scheda attiva. */
+  async function enableTracking() {
+    const tab = activeTab
+    if (!tab || tab.connId === null) return
+    tab.tracking = { state: 'pending', shell: null, message: null }
+    try {
+      const r = await invoke<{ state: TrackingInfo['state']; shell: string | null; message: string | null }>(
+        'ssh_enable_cwd_tracking',
+        { id: tab.connId },
+      )
+      tab.tracking = { state: r.state, shell: r.shell, message: r.message }
+    } catch (e) {
+      tab.tracking = { state: 'error', shell: null, message: String(e) }
+    }
+  }
+
   /** Aspetto della sessione salvata (null per il quick connect). */
   function sessionUi(sessionId: Uuid | undefined) {
     const n = sessionId ? nodes.find((x) => x.id === sessionId) : undefined
@@ -216,6 +234,8 @@
         connId={activeTab?.status === 'connected' ? activeTab.connId : null}
         cwd={activeTab?.cwd ?? ''}
         liveIds={liveConnIds}
+        tracking={activeTab?.tracking ?? { state: 'pending', shell: null, message: null }}
+        onenabletracking={enableTracking}
         {wide}
         onwiden={() => (wide = !wide)}
       />
@@ -256,6 +276,7 @@
           bind:connId={tab.connId}
           bind:cwd={tab.cwd}
           bind:status={tab.status}
+          bind:tracking={tab.tracking}
           onmanagehostkeys={() => (showSettings = true)}
           savePassword={tab.target.sessionId ? passwordSaver(tab.target.sessionId) : undefined}
         />

@@ -139,6 +139,12 @@ const it: Dict = {
   resize: 'Ridimensiona',
   widen: 'Allarga il pannello laterale',
   narrow: 'Ripristina la larghezza',
+  trackingActive: 'Directory seguita ({shell})',
+  trackingActiveHint: 'La shell comunica la directory corrente: il pannello SFTP la segue.',
+  trackingPending: 'Rilevo la shell per seguire la directory del terminale…',
+  trackingUnsupported: 'La shell "{shell}" non è ancora supportata: il pannello non può seguire il terminale. Naviga a mano, oppure usa bash, zsh o tcsh.',
+  trackingOff: 'Il tracciamento della directory è disattivato per questa sessione.',
+  trackingError: 'Non riesco ad attivare il tracciamento della directory',
   loadError: 'Impossibile leggere le sessioni',
 }
 
@@ -281,6 +287,12 @@ const en: Dict = {
   resize: 'Resize',
   widen: 'Widen the side panel',
   narrow: 'Restore the width',
+  trackingActive: 'Following directory ({shell})',
+  trackingActiveHint: 'The shell reports the current directory: the SFTP panel follows it.',
+  trackingPending: 'Detecting the shell to follow the terminal directory…',
+  trackingUnsupported: 'The shell "{shell}" is not supported yet: the panel cannot follow the terminal. Browse manually, or use bash, zsh or tcsh.',
+  trackingOff: 'Directory tracking is turned off for this session.',
+  trackingError: 'Unable to turn on directory tracking',
   loadError: 'Unable to read the sessions',
 }
 

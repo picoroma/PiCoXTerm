@@ -374,3 +374,101 @@ async fn test_connection_reports_auth_failure_unknown_key_and_timeout() {
         "{err:?}"
     );
 }
+
+// ---- Tracciamento della directory (OSC 7) ----
+
+/// Collega come `user`, attiva il tracciamento con il rilevamento automatico della shell, esegue i
+/// comandi e raccoglie le directory comunicate. Restituisce anche la shell rilevata.
+async fn cwd_events_for(user: &str, commands: &[&str]) -> (Result<String, SshError>, Vec<String>) {
+    let (tx, mut rx) = mpsc::channel(256);
+    let verifier: HostKeyVerifier =
+        Arc::new(|_| Box::pin(async { HostKeyDecision::AcceptAndSave }));
+    let shell = connect_shell(
+        ConnectParams {
+            hops: vec![Hop {
+                // Server con più shell (testenv, servizio `ssh-shells`)
+                host: "127.0.0.1".into(),
+                port: 2223,
+                username: user.into(),
+                auth: Credentials::Password("test".into()),
+            }],
+            cols: 80,
+            rows: 24,
+            term: "xterm".into(),
+        },
+        fresh_known(),
+        verifier,
+        tx,
+    )
+    .await
+    .unwrap();
+    let pause = |ms| tokio::time::sleep(std::time::Duration::from_millis(ms));
+    pause(800).await;
+    let detected = shell.enable_cwd_tracking().await;
+    if detected.is_ok() {
+        for c in commands {
+            pause(500).await;
+            shell
+                .write(
+                    format!(
+                        "{c}
+"
+                    )
+                    .into_bytes(),
+                )
+                .await
+                .unwrap();
+        }
+    }
+    let mut cwds = Vec::new();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(4);
+    while std::time::Instant::now() < deadline {
+        if let Ok(Some(pxt_ssh::ShellEvent::Cwd(p))) =
+            tokio::time::timeout(std::time::Duration::from_millis(400), rx.recv()).await
+        {
+            cwds.push(p);
+        }
+    }
+    shell.close().await;
+    (detected, cwds)
+}
+
+async fn assert_follows(user: &str, expected_shell: &str) {
+    let (detected, cwds) = cwd_events_for(user, &["cd /etc", "cd /tmp"]).await;
+    let shell = detected.unwrap_or_else(|e| panic!("{user}: {e}"));
+    assert!(
+        shell.ends_with(expected_shell),
+        "{user}: shell rilevata {shell}"
+    );
+    assert!(cwds.iter().any(|p| p == "/etc"), "{user}: {cwds:?}");
+    assert!(cwds.iter().any(|p| p == "/tmp"), "{user}: {cwds:?}");
+}
+
+#[tokio::test]
+#[ignore = "richiede il container di testenv"]
+async fn cwd_tracking_follows_cd_in_bash() {
+    assert_follows("bashuser", "bash").await;
+}
+
+#[tokio::test]
+#[ignore = "richiede il container di testenv"]
+async fn cwd_tracking_follows_cd_in_zsh() {
+    assert_follows("zshuser", "zsh").await;
+}
+
+#[tokio::test]
+#[ignore = "richiede il container di testenv"]
+async fn cwd_tracking_follows_cd_in_tcsh() {
+    assert_follows("tcshuser", "tcsh").await;
+}
+
+#[tokio::test]
+#[ignore = "richiede il container di testenv"]
+async fn cwd_tracking_reports_unsupported_shell_clearly() {
+    let (detected, cwds) = cwd_events_for("ashuser", &["cd /etc"]).await;
+    assert!(
+        matches!(&detected, Err(SshError::UnsupportedShell(s)) if s.ends_with("ash")),
+        "{detected:?}"
+    );
+    assert!(cwds.is_empty());
+}
