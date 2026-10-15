@@ -4,8 +4,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use pxt_core::{
-    subtree_ids, AuthMethod, CredentialRef, KeyringSecretProvider, LocalSessionProvider, Protocol,
-    Secret, SecretProvider, Session, SessionNode, SessionProvider,
+    subtree_ids, AuthMethod, CredentialRef, KeyringSecretProvider, LocalSessionProvider,
+    LocalSettings, Protocol, Secret, SecretProvider, Session, SessionNode, SessionProvider,
+    Settings,
 };
 use pxt_ssh::{
     ConnectParams, Credentials, Hop, HostKeyInfo, HostKeyVerifier, KnownHosts, Shell, ShellEvent,
@@ -24,6 +25,7 @@ const PASSPHRASE_REQUIRED: &str = "passphrase-required";
 
 struct AppState {
     sessions: LocalSessionProvider,
+    settings: LocalSettings,
     secrets: KeyringSecretProvider,
     known_hosts: PathBuf,
     shells: Mutex<HashMap<u64, Shell>>,
@@ -35,6 +37,7 @@ impl AppState {
     fn new(data_dir: PathBuf) -> Self {
         Self {
             sessions: LocalSessionProvider::new(data_dir.join("sessions.json")),
+            settings: LocalSettings::new(data_dir.join("settings.json")),
             secrets: KeyringSecretProvider::new(pxt_core::APP_NAME),
             known_hosts: data_dir.join("known_hosts"),
             shells: Mutex::default(),
@@ -106,6 +109,17 @@ struct ConnectRequest {
 #[tauri::command]
 fn app_info() -> String {
     format!("{} {}", pxt_core::APP_NAME, env!("CARGO_PKG_VERSION"))
+}
+
+#[tauri::command]
+fn settings_get(state: Shared<'_>) -> Result<Settings, String> {
+    state.settings.load().map_err(err)
+}
+
+/// Salva le impostazioni e restituisce i valori effettivi (dopo i limiti di validità).
+#[tauri::command]
+fn settings_set(state: Shared<'_>, settings: Settings) -> Result<Settings, String> {
+    state.settings.save(settings).map_err(err)
 }
 
 #[tauri::command]
@@ -433,6 +447,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             app_info,
+            settings_get,
+            settings_set,
             sessions_list,
             session_save,
             session_delete,

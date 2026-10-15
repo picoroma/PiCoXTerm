@@ -10,6 +10,16 @@
   color-scheme: dark;
 }
 
+:root[data-theme='light'] {
+  --bg: #ffffff;
+  --bg-elev: #f0f0f0;
+  --bg-hover: #e2e2e2;
+  --border: #c4c4c4;
+  --fg: #1e1e1e;
+  --fg-dim: #5a5a5a;
+  color-scheme: light;
+}
+
 html,
 body {
   margin: 0;

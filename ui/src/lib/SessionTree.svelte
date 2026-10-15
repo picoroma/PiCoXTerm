@@ -310,7 +310,7 @@
     background: var(--bg-hover);
   }
   .row.selected {
-    background: #2a3f6b;
+    background: color-mix(in srgb, var(--accent) 30%, transparent);
   }
   .row.drop {
     outline: 2px solid var(--accent);
@@ -362,6 +362,6 @@
     background: var(--bg-hover);
   }
   .danger-item {
-    color: #ff8a80;
+    color: var(--danger);
   }
 </style>

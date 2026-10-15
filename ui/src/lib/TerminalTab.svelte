@@ -4,10 +4,12 @@
   import { readText, writeText } from '@tauri-apps/plugin-clipboard-manager'
   import { Terminal } from '@xterm/xterm'
   import { FitAddon } from '@xterm/addon-fit'
+  import { SearchAddon } from '@xterm/addon-search'
   import '@xterm/xterm/css/xterm.css'
   import Modal from './Modal.svelte'
   import { t } from '../i18n'
-
+  import { settings } from './settings.svelte'
+  import { terminalThemes } from './themes'
   import type { Target } from './types'
 
   type TermEvent =
@@ -41,8 +43,16 @@
   let savePasswordChecked = $state(false)
 
   let termEl: HTMLDivElement
+  let searchInput = $state<HTMLInputElement>()
   let term: Terminal
   let fit: FitAddon
+  let searchAddon: SearchAddon
+  /** Zoom locale della scheda (Ctrl+rotella), in punti rispetto al font delle impostazioni. */
+  let zoom = $state(0)
+  let searching = $state(false)
+  let query = $state('')
+  let caseSensitive = $state(false)
+  let noMatch = $state(false)
   let connId: number | null = null
   const encoder = new TextEncoder()
 
@@ -54,7 +64,7 @@
   async function pasteFromClipboard() {
     const text = await readText().catch(() => '')
     if (!text) return
-    if (text.trim().includes('\n')) pendingPaste = text
+    if (settings.pasteMultilineWarning && text.trim().includes('\n')) pendingPaste = text
     else term.paste(text)
   }
 
@@ -63,6 +73,34 @@
     pendingPaste = null
     if (ok && text) term.paste(text)
     term.focus()
+  }
+
+  function runSearch(forward: boolean, incremental = false) {
+    if (!query) {
+      searchAddon.clearDecorations()
+      noMatch = false
+      return
+    }
+    const opts = { caseSensitive, incremental }
+    noMatch = !(forward ? searchAddon.findNext(query, opts) : searchAddon.findPrevious(query, opts))
+  }
+
+  async function openSearch() {
+    searching = true
+    await tick()
+    searchInput?.focus()
+    searchInput?.select()
+  }
+
+  function closeSearch() {
+    searching = false
+    noMatch = false
+    searchAddon.clearDecorations()
+    term.focus()
+  }
+
+  function setZoom(next: number) {
+    zoom = Math.max(-6, Math.min(12, next))
   }
 
   async function connect(password?: string) {
@@ -140,19 +178,32 @@
 
   onMount(() => {
     term = new Terminal({
-      fontFamily: 'Consolas, "DejaVu Sans Mono", monospace',
-      fontSize: 14,
-      scrollback: 10000,
+      fontFamily: settings.fontFamily,
+      fontSize: settings.fontSize,
+      scrollback: settings.scrollback,
+      theme: terminalThemes[settings.theme],
       cursorBlink: true,
     })
     fit = new FitAddon()
+    searchAddon = new SearchAddon()
     term.loadAddon(fit)
+    term.loadAddon(searchAddon)
     term.open(termEl)
     fit.fit()
     // Copia su selezione; Ctrl+Shift+C / Ctrl+Shift+V come alternativa da tastiera
-    term.onSelectionChange(() => void copySelection())
+    term.onSelectionChange(() => {
+      if (settings.copyOnSelect) void copySelection()
+    })
     term.attachCustomKeyEventHandler((ev) => {
+      if (ev.type === 'keydown' && ev.ctrlKey && !ev.shiftKey && ev.code === 'Digit0') {
+        setZoom(0)
+        return false
+      }
       if (ev.type === 'keydown' && ev.ctrlKey && ev.shiftKey) {
+        if (ev.code === 'KeyF') {
+          void openSearch()
+          return false
+        }
         if (ev.code === 'KeyC') {
           void copySelection()
           return false
@@ -172,9 +223,17 @@
       if (connId !== null) void invoke('ssh_resize', { id: connId, cols: term.cols, rows: term.rows })
     })
     obs.observe(termEl)
+    // Ctrl+rotella: zoom del font (listener non passivo, per poter bloccare lo scroll)
+    const onWheel = (ev: WheelEvent) => {
+      if (!ev.ctrlKey) return
+      ev.preventDefault()
+      setZoom(zoom + (ev.deltaY < 0 ? 1 : -1))
+    }
+    termEl.addEventListener('wheel', onWheel, { passive: false })
     void connect()
 
     return () => {
+      termEl.removeEventListener('wheel', onWheel)
       obs.disconnect()
       if (connId !== null) void invoke('ssh_close', { id: connId })
       term.dispose()
@@ -183,6 +242,17 @@
 
   $effect(() => {
     if (active) void tick().then(() => term?.focus())
+  })
+
+  // Applica le impostazioni (e lo zoom locale) al terminale già aperto.
+  $effect(() => {
+    if (!term) return
+    term.options.fontFamily = settings.fontFamily
+    term.options.fontSize = Math.max(6, settings.fontSize + zoom)
+    term.options.scrollback = settings.scrollback
+    term.options.theme = terminalThemes[settings.theme]
+    fit.fit()
+    if (connId !== null) void invoke('ssh_resize', { id: connId, cols: term.cols, rows: term.rows })
   })
 </script>
 
@@ -203,11 +273,34 @@
   </div>
   {#if error}<div class="error">{error}</div>{/if}
 
+  {#if searching}
+    <div class="search" role="search">
+      <input
+        bind:this={searchInput}
+        bind:value={query}
+        class:nomatch={noMatch}
+        placeholder={t('search')}
+        aria-label={t('search')}
+        oninput={() => runSearch(true, true)}
+        onkeydown={(e) => {
+          if (e.key === 'Enter') runSearch(!e.shiftKey)
+          else if (e.key === 'Escape') closeSearch()
+        }}
+      />
+      <button type="button" title={t('searchPrev')} aria-label={t('searchPrev')} onclick={() => runSearch(false)}>↑</button>
+      <button type="button" title={t('searchNext')} aria-label={t('searchNext')} onclick={() => runSearch(true)}>↓</button>
+      <label class="case"><input type="checkbox" bind:checked={caseSensitive} onchange={() => runSearch(true, true)} /> Aa</label>
+      {#if noMatch}<span class="dim">{t('noMatch')}</span>{/if}
+      <button type="button" aria-label={t('close')} onclick={closeSearch}>✕</button>
+    </div>
+  {/if}
   <div
     class="term"
     role="presentation"
+    style:background={terminalThemes[settings.theme].background}
     bind:this={termEl}
     oncontextmenu={(e) => {
+      if (!settings.rightClickPaste) return
       e.preventDefault()
       void pasteFromClipboard()
     }}
@@ -297,7 +390,25 @@
     flex: 1;
     min-height: 0;
     padding: 4px;
-    background: #000;
+  }
+  .search {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 8px;
+    background: var(--bg-elev);
+  }
+  .search input:not([type='checkbox']) {
+    width: 260px;
+  }
+  .search input.nomatch {
+    border-color: var(--danger);
+  }
+  .case {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 13px;
   }
   .status {
     padding: 4px 8px;

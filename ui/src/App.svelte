@@ -4,6 +4,8 @@
   import SessionDialog from './lib/SessionDialog.svelte'
   import SessionTree from './lib/SessionTree.svelte'
   import TerminalTab from './lib/TerminalTab.svelte'
+  import SettingsDialog from './lib/SettingsDialog.svelte'
+  import { loadSettings } from './lib/settings.svelte'
   import { deleteNode, listNodes, saveNode } from './lib/api'
   import { newFolder, newSession, type Folder, type Session, type SessionNode, type Target, type Uuid } from './lib/types'
   import { t } from './i18n'
@@ -25,6 +27,7 @@
   let folderName = $state('')
   let deleting = $state<SessionNode | null>(null)
   let quick = $state('')
+  let showSettings = $state(false)
 
   async function reload() {
     try {
@@ -34,7 +37,10 @@
     }
   }
 
-  onMount(reload)
+  onMount(() => {
+    void reload()
+    loadSettings().catch((e) => (notice = String(e)))
+  })
 
   function openTab(title: string, target: Target) {
     const tab = { key: nextKey++, title, target }
@@ -148,6 +154,7 @@
         <input bind:value={quick} placeholder={t('quickConnect')} aria-label={t('quickConnect')} />
         <button type="submit">{t('connect')}</button>
       </form>
+      <button type="button" class="gear" title={t('settings')} aria-label={t('settings')} onclick={() => (showSettings = true)}>⚙</button>
     </div>
     {#if notice}<div class="notice">{notice}</div>{/if}
 
@@ -174,6 +181,10 @@
     </div>
   </section>
 </main>
+
+{#if showSettings}
+  <SettingsDialog onclose={() => (showSettings = false)} />
+{/if}
 
 {#if editing}
   <SessionDialog
@@ -225,6 +236,14 @@
     padding: 8px;
     background: var(--bg-elev);
   }
+  .topbar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .topbar .gear {
+    margin-left: auto;
+  }
   .topbar form {
     display: flex;
     gap: 8px;
@@ -255,7 +274,7 @@
     background: var(--bg);
   }
   .tab.on {
-    background: #000;
+    background: var(--bg-hover);
     border-color: var(--accent);
   }
   .tab button {

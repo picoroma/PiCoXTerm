@@ -12,7 +12,19 @@ key.auth = { method: 'key', keyPath: 'C:\\keys\\id_ed25519' }
 let nodes: SessionNode[] = [root, pw, key]
 
 let cb = 0
+let settings: any = {
+  schemaVersion: 1,
+  theme: 'dark',
+  fontFamily: 'Consolas, monospace',
+  fontSize: 14,
+  scrollback: 10000,
+  copyOnSelect: true,
+  rightClickPaste: true,
+  pasteMultilineWarning: true,
+}
 const handlers: Record<string, (args: any) => unknown> = {
+  settings_get: () => settings,
+  settings_set: (args) => (settings = args.settings),
   sessions_list: () => JSON.parse(JSON.stringify(nodes)),
   session_save: ({ node }) => {
     const i = nodes.findIndex((n) => n.id === node.id)

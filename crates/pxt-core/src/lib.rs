@@ -6,12 +6,14 @@ pub mod local;
 pub mod model;
 pub mod provider;
 pub mod secrets;
+pub mod settings;
 
 pub use error::{CoreError, Result};
 pub use local::LocalSessionProvider;
 pub use model::*;
 pub use provider::{Secret, SecretProvider, SessionProvider};
 pub use secrets::KeyringSecretProvider;
+pub use settings::{LocalSettings, Settings, Theme};
 
 /// Nome del prodotto, usato per cartelle dati e keyring.
 pub const APP_NAME: &str = "PiCoXterm";
