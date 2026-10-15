@@ -60,13 +60,24 @@
       (method !== 'key' || keyPath.trim() !== ''),
   )
 
-  async function browse() {
-    let defaultPath: string | undefined
+  /** Cartella da cui aprire il selettore: quella della chiave attuale, altrimenti `~/.ssh`. */
+  async function startFolder(): Promise<string | undefined> {
+    const current = keyPath.trim()
     try {
-      defaultPath = await join(await homeDir(), '.ssh')
+      const home = await homeDir()
+      if (!current) return await join(home, '.ssh')
+      // `~` iniziale -> cartella home
+      const full = current.startsWith('~') ? await join(home, current.slice(1).replace(/^[\\/]+/, '')) : current
+      // tiene solo la cartella: il file potrebbe non esistere più
+      const cut = Math.max(full.lastIndexOf('/'), full.lastIndexOf('\\'))
+      return cut > 0 ? full.slice(0, cut) : await join(home, '.ssh')
     } catch {
-      defaultPath = undefined
+      return undefined
     }
+  }
+
+  async function browse() {
+    const defaultPath = await startFolder()
     const picked = await open({ multiple: false, directory: false, defaultPath, title: t('keyFile') })
     if (typeof picked === 'string') keyPath = picked
   }

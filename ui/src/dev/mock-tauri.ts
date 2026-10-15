@@ -96,7 +96,10 @@ const handlers: Record<string, (args: any) => unknown> = {
   },
   'plugin:path|resolve_directory': () => 'C:\\Users\\mock',
   'plugin:path|join': ({ paths }) => paths.join('\\'),
-  'plugin:dialog|open': () => null,
+  'plugin:dialog|open': (args) => {
+    ;(window as any).__lastOpen = args
+    return null
+  },
 }
 
 ;(window as any).__TAURI_INTERNALS__ = {
