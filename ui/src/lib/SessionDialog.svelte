@@ -4,6 +4,7 @@
   import { open } from '@tauri-apps/plugin-dialog'
   import Modal from './Modal.svelte'
   import { t } from '../i18n'
+  import { THEME_NAMES, type ThemeName } from './themes'
   import type { AuthMethod, Session } from './types'
 
   let {
@@ -33,6 +34,13 @@
   let clearSecret = $state(false)
   let notes = $state(initial.notes)
   let tags = $state(initial.ui.tags.join(', '))
+  let uiTheme = $state<ThemeName | ''>(initial.ui.theme ?? '')
+  let uiFontFamily = $state(initial.ui.fontFamily ?? '')
+  let uiFontSize = $state<number | null>(initial.ui.fontSize)
+  let bgOn = $state(initial.ui.background !== null)
+  let bgColor = $state(initial.ui.background ?? '#2a0000')
+  let colorOn = $state(initial.ui.color !== null)
+  let tabColor = $state(initial.ui.color ?? '#c0392b')
   let jumps = $state<string[]>([...initial.jumpHosts])
   let jumpToAdd = $state('')
   const available = $derived(
@@ -93,6 +101,11 @@
           .split(',')
           .map((x) => x.trim())
           .filter(Boolean),
+        theme: uiTheme || null,
+        fontFamily: uiFontFamily.trim() || null,
+        fontSize: uiFontSize ? Number(uiFontSize) : null,
+        background: bgOn ? bgColor : null,
+        color: colorOn ? tabColor : null,
       },
       updatedAt: new Date().toISOString(),
     }
@@ -167,6 +180,28 @@
       </div>
       {#if jumps.length > 0}<p class="hint">{t('jumpHint')}</p>{/if}
     </fieldset>
+    <fieldset>
+      <legend>{t('appearance')}</legend>
+      <label>
+        {t('theme')}
+        <select bind:value={uiTheme}>
+          <option value="">{t('themeDefault')}</option>
+          {#each THEME_NAMES as name (name)}
+            <option value={name}>{t(`theme_${name}`)}</option>
+          {/each}
+        </select>
+      </label>
+      <div class="row">
+        <label class="grow">{t('fontFamily')}<input bind:value={uiFontFamily} placeholder={t('inherit')} /></label>
+        <label class="narrow">{t('fontSize')}<input type="number" min="8" max="32" bind:value={uiFontSize} placeholder="—" /></label>
+      </div>
+      <div class="row center">
+        <label class="check"><input type="checkbox" bind:checked={bgOn} /> {t('customBackground')}</label>
+        <input type="color" bind:value={bgColor} disabled={!bgOn} aria-label={t('customBackground')} />
+        <label class="check"><input type="checkbox" bind:checked={colorOn} /> {t('tabColor')}</label>
+        <input type="color" bind:value={tabColor} disabled={!colorOn} aria-label={t('tabColor')} />
+      </div>
+    </fieldset>
     <label>{t('tags')}<input bind:value={tags} placeholder="PRD, SAP" /></label>
     <label>{t('notes')}<textarea rows="3" bind:value={notes}></textarea></label>
   </form>
@@ -222,6 +257,15 @@
   }
   .jump button {
     padding: 2px 8px;
+  }
+  .center {
+    align-items: center;
+    flex-wrap: wrap;
+  }
+  input[type='color'] {
+    padding: 0 2px;
+    height: 28px;
+    width: 44px;
   }
   .hint {
     margin: 0;

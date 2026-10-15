@@ -4,6 +4,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::settings::{self, Theme};
+
 pub const SCHEMA_VERSION: u32 = 1;
 
 /// Riferimento a una credenziale custodita da un `SecretProvider`.
@@ -81,12 +83,47 @@ pub struct SftpOptions {
     pub show_hidden: bool,
 }
 
+/// Aspetto della sessione. I campi `None` ereditano dalle impostazioni globali.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct UiOptions {
+    /// Colore della scheda e dell'albero, `#rrggbb`.
     pub color: Option<String>,
     pub icon: Option<String>,
     #[serde(default)]
     pub tags: Vec<String>,
+    /// Tema del terminale per questa sessione.
+    #[serde(default)]
+    pub theme: Option<Theme>,
+    #[serde(default)]
+    pub font_family: Option<String>,
+    #[serde(default)]
+    pub font_size: Option<u8>,
+    /// Sfondo del terminale (sovrascrive quello del tema), `#rrggbb`.
+    #[serde(default)]
+    pub background: Option<String>,
+}
+
+fn is_hex_color(s: &str) -> bool {
+    s.len() == 7 && s.starts_with('#') && s[1..].chars().all(|c| c.is_ascii_hexdigit())
+}
+
+impl UiOptions {
+    /// I colori finiscono in stili CSS: accetta solo `#rrggbb`. Riporta anche la dimensione del font nei limiti.
+    pub fn sanitized(mut self) -> std::result::Result<Self, String> {
+        for (name, value) in [("colore", &self.color), ("sfondo", &self.background)] {
+            if let Some(v) = value {
+                if !is_hex_color(v) {
+                    return Err(format!("{name} non valido: atteso #rrggbb"));
+                }
+            }
+        }
+        self.font_size = self
+            .font_size
+            .map(|s| s.clamp(settings::MIN_FONT_SIZE, settings::MAX_FONT_SIZE));
+        self.font_family = self.font_family.filter(|f| !f.trim().is_empty());
+        Ok(self)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -245,6 +282,39 @@ mod tests {
         assert_eq!(v["credentialRef"]["provider"], "local");
         // Nessun campo che possa contenere una password
         assert!(v.get("password").is_none());
+    }
+
+    #[test]
+    fn ui_options_validate_colors_and_clamp_font() {
+        let ok = UiOptions {
+            color: Some("#c0392b".into()),
+            background: Some("#2a0000".into()),
+            font_size: Some(200),
+            font_family: Some("  ".into()),
+            theme: Some(Theme::Dracula),
+            ..UiOptions::default()
+        }
+        .sanitized()
+        .unwrap();
+        assert_eq!(ok.font_size, Some(settings::MAX_FONT_SIZE));
+        assert_eq!(ok.font_family, None);
+
+        for bad in ["red", "#12345", "#gggggg", "url(x)", "#ff0000;x"] {
+            let r = UiOptions {
+                background: Some(bad.into()),
+                ..UiOptions::default()
+            }
+            .sanitized();
+            assert!(r.is_err(), "{bad} doveva essere rifiutato");
+        }
+    }
+
+    #[test]
+    fn old_ui_block_without_new_fields_still_loads() {
+        let ui: UiOptions =
+            serde_json::from_str(r#"{"color":null,"icon":null,"tags":["PRD"]}"#).unwrap();
+        assert_eq!(ui.theme, None);
+        assert_eq!(ui.tags, vec!["PRD"]);
     }
 
     #[test]

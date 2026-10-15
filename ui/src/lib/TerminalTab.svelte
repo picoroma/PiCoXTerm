@@ -10,7 +10,7 @@
   import { t } from '../i18n'
   import { settings } from './settings.svelte'
   import { terminalThemes } from './themes'
-  import type { Target } from './types'
+  import type { SessionUi, Target } from './types'
 
   type TermEvent =
     | { type: 'hostKey'; reqId: number; host: string; port: number; keyType: string; fingerprint: string }
@@ -20,10 +20,13 @@
   let {
     target,
     active,
+    ui = null,
     savePassword,
   }: {
     target: Target
     active: boolean
+    /** Aspetto della sessione salvata; i campi null ereditano dalle impostazioni. */
+    ui?: SessionUi | null
     /** Salva la password nella sessione (solo per sessioni salvate). */
     savePassword?: (password: string) => Promise<void>
   } = $props()
@@ -55,6 +58,25 @@
   let noMatch = $state(false)
   let connId: number | null = null
   const encoder = new TextEncoder()
+
+  /** Luminosità percepita di un colore #rrggbb, da 0 a 1. */
+  function luminance(hex: string): number {
+    const n = parseInt(hex.slice(1), 16)
+    return (0.299 * ((n >> 16) & 255) + 0.587 * ((n >> 8) & 255) + 0.114 * (n & 255)) / 255
+  }
+
+  // Aspetto effettivo: la sessione sovrascrive le impostazioni globali.
+  const look = $derived.by(() => {
+    const base = terminalThemes[ui?.theme ?? settings.theme]
+    const bg = ui?.background ?? null
+    // Con uno sfondo personalizzato si sceglie il testo (chiaro o scuro) in base alla sua luminosità.
+    const fg = bg ? (luminance(bg) > 0.5 ? '#1e1e1e' : '#e6e6e6') : undefined
+    return {
+      theme: bg ? { ...base, background: bg, foreground: fg, cursor: fg } : base,
+      fontFamily: ui?.fontFamily ?? settings.fontFamily,
+      fontSize: ui?.fontSize ?? settings.fontSize,
+    }
+  })
 
   async function copySelection() {
     const sel = term?.getSelection()
@@ -178,10 +200,10 @@
 
   onMount(() => {
     term = new Terminal({
-      fontFamily: settings.fontFamily,
-      fontSize: settings.fontSize,
+      fontFamily: look.fontFamily,
+      fontSize: look.fontSize,
       scrollback: settings.scrollback,
-      theme: terminalThemes[settings.theme],
+      theme: look.theme,
       cursorBlink: true,
     })
     fit = new FitAddon()
@@ -247,10 +269,10 @@
   // Applica le impostazioni (e lo zoom locale) al terminale già aperto.
   $effect(() => {
     if (!term) return
-    term.options.fontFamily = settings.fontFamily
-    term.options.fontSize = Math.max(6, settings.fontSize + zoom)
+    term.options.fontFamily = look.fontFamily
+    term.options.fontSize = Math.max(6, look.fontSize + zoom)
     term.options.scrollback = settings.scrollback
-    term.options.theme = terminalThemes[settings.theme]
+    term.options.theme = look.theme
     fit.fit()
     if (connId !== null) void invoke('ssh_resize', { id: connId, cols: term.cols, rows: term.rows })
   })
@@ -297,7 +319,7 @@
   <div
     class="term"
     role="presentation"
-    style:background={terminalThemes[settings.theme].background}
+    style:background={look.theme.background}
     bind:this={termEl}
     oncontextmenu={(e) => {
       if (!settings.rightClickPaste) return

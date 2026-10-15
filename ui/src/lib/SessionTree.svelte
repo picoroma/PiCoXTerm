@@ -228,6 +228,9 @@
         onkeydown={(e) => onkey(e, node)}
       >
         <span class="icon">{node.type === 'folder' ? (expanded ? '▾ 📂' : '▸ 📁') : '🖥'}</span>
+        {#if node.type === 'session' && node.ui.color}
+          <span class="dot" style:background={node.ui.color}></span>
+        {/if}
         <span class="name">{node.name}</span>
         {#if node.type === 'session'}
           {#each node.ui.tags as tag (tag)}<span class="tag">{tag}</span>{/each}
@@ -315,6 +318,12 @@
   .row.drop {
     outline: 2px solid var(--accent);
     outline-offset: -2px;
+  }
+  .dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex: none;
   }
   .name {
     overflow: hidden;

@@ -122,6 +122,12 @@
     await run(() => saveNode(moved))
   }
 
+  /** Aspetto della sessione salvata (null per il quick connect). */
+  function sessionUi(sessionId: Uuid | undefined) {
+    const n = sessionId ? nodes.find((x) => x.id === sessionId) : undefined
+    return n?.type === 'session' ? n.ui : null
+  }
+
   /** Salva la password digitata in una scheda nella sessione corrispondente. */
   function passwordSaver(sessionId: Uuid) {
     return async (password: string) => {
@@ -160,7 +166,12 @@
 
     <div class="tabs" role="tablist">
       {#each tabs as tab (tab.key)}
-        <div class="tab" class:on={tab.key === activeKey} role="presentation">
+        <div
+          class="tab"
+          class:on={tab.key === activeKey}
+          style:border-top-color={sessionUi(tab.target.sessionId)?.color ?? undefined}
+          role="presentation"
+        >
           <button role="tab" aria-selected={tab.key === activeKey} onclick={() => (activeKey = tab.key)}>{tab.title}</button>
           <button class="x" aria-label={t('closeTab')} title={t('closeTab')} onclick={() => closeTab(tab.key)}>×</button>
         </div>
@@ -172,6 +183,7 @@
         <TerminalTab
           target={tab.target}
           active={tab.key === activeKey}
+          ui={sessionUi(tab.target.sessionId)}
           savePassword={tab.target.sessionId ? passwordSaver(tab.target.sessionId) : undefined}
         />
       {/each}
@@ -270,6 +282,7 @@
     align-items: center;
     border: 1px solid var(--border);
     border-bottom: none;
+    border-top: 3px solid var(--border);
     border-radius: 6px 6px 0 0;
     background: var(--bg);
   }

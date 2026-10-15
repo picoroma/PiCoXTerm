@@ -137,6 +137,7 @@ async fn session_save(
 ) -> Result<SessionNode, String> {
     let mut node = node;
     if let SessionNode::Session(s) = &mut node {
+        s.ui = s.ui.clone().sanitized()?;
         if clear_password {
             if let Some(r) = s.credential_ref.take() {
                 state.secrets.delete(&r).await.map_err(err)?;

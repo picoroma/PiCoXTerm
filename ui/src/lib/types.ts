@@ -1,10 +1,23 @@
 // Specchio del modello di pxt-core (sezione 4 delle specifiche). Qui non ci sono mai segreti.
 
+import type { ThemeName } from './themes'
+
 export type Uuid = string
 
 export interface CredentialRef {
   provider: string
   id: string
+}
+
+/** Aspetto per sessione: i campi null ereditano dalle impostazioni globali. */
+export interface SessionUi {
+  color: string | null
+  icon: string | null
+  tags: string[]
+  theme: ThemeName | null
+  fontFamily: string | null
+  fontSize: number | null
+  background: string | null
 }
 
 export type AuthMethod = 'password' | 'key' | 'agent' | 'keyboard-interactive'
@@ -37,7 +50,7 @@ export interface Session {
     encoding: string
   }
   sftp: { startPath: string | null; showHidden: boolean }
-  ui: { color: string | null; icon: string | null; tags: string[] }
+  ui: SessionUi
   notes: string
   createdAt: string
   updatedAt: string
@@ -81,7 +94,7 @@ export function newSession(parentId: Uuid | null): Session {
       encoding: 'utf-8',
     },
     sftp: { startPath: null, showHidden: false },
-    ui: { color: null, icon: null, tags: [] },
+    ui: { color: null, icon: null, tags: [], theme: null, fontFamily: null, fontSize: null, background: null },
     notes: '',
     createdAt: now,
     updatedAt: now,

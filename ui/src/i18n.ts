@@ -83,6 +83,11 @@ const it: Dict = {
   searchNext: 'Successivo (Invio)',
   noMatch: 'Nessun risultato',
   close: 'Chiudi',
+  appearance: 'Aspetto',
+  themeDefault: 'Predefinito (dalle impostazioni)',
+  inherit: 'Come le impostazioni',
+  customBackground: 'Sfondo personalizzato',
+  tabColor: 'Colore della scheda',
   loadError: 'Impossibile leggere le sessioni',
 }
 
@@ -169,6 +174,11 @@ const en: Dict = {
   searchNext: 'Next (Enter)',
   noMatch: 'No match',
   close: 'Close',
+  appearance: 'Appearance',
+  themeDefault: 'Default (from settings)',
+  inherit: 'Same as settings',
+  customBackground: 'Custom background',
+  tabColor: 'Tab color',
   loadError: 'Unable to read the sessions',
 }
 
