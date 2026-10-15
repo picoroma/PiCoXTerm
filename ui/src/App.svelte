@@ -176,7 +176,10 @@
 </main>
 
 {#if editing}
-  <SessionDialog session={editing.session} isNew={editing.isNew} onsave={saveSession} oncancel={() => (editing = null)} />
+  <SessionDialog
+    session={editing.session}
+    isNew={editing.isNew}
+    candidates={nodes.filter((n): n is Session => n.type === 'session')} onsave={saveSession} oncancel={() => (editing = null)} />
 {/if}
 
 {#if folderDialog}

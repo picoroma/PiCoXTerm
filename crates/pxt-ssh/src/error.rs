@@ -24,6 +24,10 @@ pub enum SshError {
     },
     #[error("tipo di host key non supportato (certificati non ancora gestiti)")]
     UnsupportedHostKey,
+    #[error("il server non consente l'inoltro TCP verso il salto successivo (AllowTcpForwarding)")]
+    ForwardingDenied,
+    #[error("jump host {host}: {source}")]
+    Jump { host: String, source: Box<SshError> },
     #[error("errore di I/O: {0}")]
     Io(#[from] std::io::Error),
     #[error("errore SSH: {0}")]

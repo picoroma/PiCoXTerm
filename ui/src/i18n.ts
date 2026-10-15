@@ -60,6 +60,12 @@ const it: Dict = {
   passphraseNone: 'Vuoto se la chiave non ha passphrase, oppure chiedila a ogni connessione',
   passphrasePromptTitle: 'Passphrase richiesta',
   agentHint: 'Usa le chiavi caricate nell’agent in esecuzione. Nessun segreto viene salvato.',
+  jumpHosts: 'Jump host (in ordine, dal primo all’ultimo)',
+  addJump: 'Aggiungi un jump host…',
+  add: 'Aggiungi',
+  remove: 'Rimuovi',
+  missingSession: 'sessione eliminata',
+  jumpHint: 'Le credenziali di ogni jump host devono essere salvate nella sua sessione (o usare agent).',
   loadError: 'Impossibile leggere le sessioni',
 }
 
@@ -123,6 +129,12 @@ const en: Dict = {
   passphraseNone: 'Empty if the key has no passphrase, or be asked at every connection',
   passphrasePromptTitle: 'Passphrase required',
   agentHint: 'Uses the keys loaded in the running agent. No secret is stored.',
+  jumpHosts: 'Jump hosts (in order, first to last)',
+  addJump: 'Add a jump host…',
+  add: 'Add',
+  remove: 'Remove',
+  missingSession: 'deleted session',
+  jumpHint: 'Each jump host needs its credentials saved in its own session (or use an agent).',
   loadError: 'Unable to read the sessions',
 }
 

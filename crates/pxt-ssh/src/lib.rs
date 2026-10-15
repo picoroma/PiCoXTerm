@@ -10,4 +10,6 @@ mod shell;
 pub use auth::Credentials;
 pub use error::SshError;
 pub use known_hosts::{HostKeyStatus, KnownHosts};
-pub use shell::{connect_shell, ConnectParams, HostKeyInfo, HostKeyVerifier, Shell, ShellEvent};
+pub use shell::{
+    connect_shell, ConnectParams, Hop, HostKeyInfo, HostKeyVerifier, Shell, ShellEvent,
+};

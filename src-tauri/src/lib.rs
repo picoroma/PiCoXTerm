@@ -5,10 +5,10 @@ use std::sync::{Arc, Mutex};
 
 use pxt_core::{
     subtree_ids, AuthMethod, CredentialRef, KeyringSecretProvider, LocalSessionProvider, Protocol,
-    Secret, SecretProvider, SessionNode, SessionProvider,
+    Secret, SecretProvider, Session, SessionNode, SessionProvider,
 };
 use pxt_ssh::{
-    ConnectParams, Credentials, HostKeyInfo, HostKeyVerifier, KnownHosts, Shell, ShellEvent,
+    ConnectParams, Credentials, Hop, HostKeyInfo, HostKeyVerifier, KnownHosts, Shell, ShellEvent,
     SshError,
 };
 use serde::{Deserialize, Serialize};
@@ -161,6 +161,78 @@ async fn session_delete(state: Shared<'_>, id: Uuid) -> Result<(), String> {
     Ok(())
 }
 
+/// Numero massimo di jump host in catena.
+const MAX_JUMPS: usize = 5;
+
+/// Dati di connessione di una sessione SSH salvata.
+struct Endpoint {
+    host: String,
+    port: u16,
+    username: String,
+    credential_ref: Option<CredentialRef>,
+    method: AuthMethod,
+    key_path: Option<String>,
+}
+
+impl Endpoint {
+    fn of(s: &Session) -> Self {
+        Self {
+            host: s.host.clone(),
+            port: s.port,
+            username: s.username.clone(),
+            credential_ref: s.credential_ref.clone(),
+            method: s.auth.method,
+            key_path: s.auth.key_path.clone(),
+        }
+    }
+}
+
+enum CredError {
+    NeedSecret,
+    Other(String),
+}
+
+async fn stored_secret(
+    state: &AppState,
+    r: &Option<CredentialRef>,
+) -> Result<Option<String>, String> {
+    match r {
+        Some(r) => Ok(state
+            .secrets
+            .get(r)
+            .await
+            .map_err(err)?
+            .map(|s| s.expose().to_string())),
+        None => Ok(None),
+    }
+}
+
+fn build_credentials(
+    method: AuthMethod,
+    key_path: Option<String>,
+    secret: Option<String>,
+) -> Result<Credentials, CredError> {
+    match method {
+        AuthMethod::Password => secret
+            .map(Credentials::Password)
+            .ok_or(CredError::NeedSecret),
+        // La passphrase è opzionale: se la chiave è cifrata la richiede la connessione.
+        AuthMethod::Key => {
+            let path = key_path
+                .filter(|p| !p.trim().is_empty())
+                .ok_or_else(|| CredError::Other("percorso della chiave privata mancante".into()))?;
+            Ok(Credentials::Key {
+                path: path.into(),
+                passphrase: secret,
+            })
+        }
+        AuthMethod::Agent => Ok(Credentials::Agent),
+        AuthMethod::KeyboardInteractive => Err(CredError::Other(
+            "keyboard-interactive non ancora supportato".into(),
+        )),
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 #[tauri::command]
 async fn ssh_connect(
@@ -171,63 +243,72 @@ async fn ssh_connect(
     on_data: Channel<InvokeResponseBody>,
     on_event: Channel<TermEvent>,
 ) -> Result<u64, String> {
-    let (host, port, username, stored_ref, method, key_path) = match request.session_id {
+    let nodes = state.sessions.list().await.map_err(err)?;
+    let (dest, jump_ids) = match request.session_id {
         Some(id) => {
-            let nodes = state.sessions.list().await.map_err(err)?;
-            let Some(SessionNode::Session(s)) = nodes.into_iter().find(|n| n.id() == id) else {
+            let Some(SessionNode::Session(s)) = nodes.iter().find(|n| n.id() == id) else {
                 return Err("sessione non trovata".into());
             };
             if s.protocol != Protocol::Ssh {
                 return Err("protocollo non ancora supportato".into());
             }
-            (
-                s.host,
-                s.port,
-                s.username,
-                s.credential_ref,
-                s.auth.method,
-                s.auth.key_path,
-            )
+            (Endpoint::of(s), s.jump_hosts.clone())
         }
         None => (
-            request.host.ok_or("host mancante")?,
-            request.port.unwrap_or(22),
-            request.username.ok_or("utente mancante")?,
-            None,
-            AuthMethod::Password,
-            None,
+            Endpoint {
+                host: request.host.ok_or("host mancante")?,
+                port: request.port.unwrap_or(22),
+                username: request.username.ok_or("utente mancante")?,
+                credential_ref: None,
+                method: AuthMethod::Password,
+                key_path: None,
+            },
+            Vec::new(),
         ),
     };
+    if jump_ids.len() > MAX_JUMPS {
+        return Err(format!("troppi jump host (massimo {MAX_JUMPS})"));
+    }
 
-    // Segreto fornito ora dall'utente, altrimenti quello nel keyring (se c'è).
+    // Jump host: le credenziali devono essere già salvate (o agent / chiave senza passphrase).
+    let mut hops = Vec::new();
+    for jid in &jump_ids {
+        let Some(SessionNode::Session(j)) = nodes.iter().find(|n| n.id() == *jid) else {
+            return Err("jump host non trovato (sessione eliminata?)".into());
+        };
+        let ep = Endpoint::of(j);
+        let secret = stored_secret(&state, &ep.credential_ref).await?;
+        let auth =
+            build_credentials(ep.method, ep.key_path.clone(), secret).map_err(|e| match e {
+                CredError::NeedSecret => format!(
+                    "jump host \"{}\": password non salvata (salvala nella sessione del jump host)",
+                    j.name
+                ),
+                CredError::Other(m) => format!("jump host \"{}\": {m}", j.name),
+            })?;
+        hops.push(Hop {
+            host: ep.host,
+            port: ep.port,
+            username: ep.username,
+            auth,
+        });
+    }
+
+    // Destinazione: segreto fornito ora dall'utente, altrimenti quello nel keyring (se c'è).
     let secret = match request.password {
         Some(p) => Some(p),
-        None => match &stored_ref {
-            Some(r) => state
-                .secrets
-                .get(r)
-                .await
-                .map_err(err)?
-                .map(|s| s.expose().to_string()),
-            None => None,
-        },
+        None => stored_secret(&state, &dest.credential_ref).await?,
     };
-
-    let auth = match method {
-        AuthMethod::Password => Credentials::Password(secret.ok_or(PASSWORD_REQUIRED)?),
-        // La passphrase è opzionale: se la chiave è cifrata la richiede la connessione.
-        AuthMethod::Key => Credentials::Key {
-            path: key_path
-                .filter(|p| !p.trim().is_empty())
-                .ok_or("percorso della chiave privata mancante")?
-                .into(),
-            passphrase: secret,
-        },
-        AuthMethod::Agent => Credentials::Agent,
-        AuthMethod::KeyboardInteractive => {
-            return Err("keyboard-interactive non ancora supportato".into())
-        }
-    };
+    let auth = build_credentials(dest.method, dest.key_path, secret).map_err(|e| match e {
+        CredError::NeedSecret => PASSWORD_REQUIRED.to_string(),
+        CredError::Other(m) => m,
+    })?;
+    hops.push(Hop {
+        host: dest.host,
+        port: dest.port,
+        username: dest.username,
+        auth,
+    });
 
     let verifier: HostKeyVerifier = {
         let state = Arc::clone(&state);
@@ -277,10 +358,7 @@ async fn ssh_connect(
 
     let shell = pxt_ssh::connect_shell(
         ConnectParams {
-            host,
-            port,
-            username,
-            auth,
+            hops,
             cols,
             rows,
             term: "xterm-256color".into(),

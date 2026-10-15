@@ -13,5 +13,6 @@ services:
       - PUBLIC_KEY_DIR=/pubkeys
     volumes:
       - ./keys/authorized.pub:/pubkeys/authorized.pub:ro
+      - ./init:/custom-cont-init.d:ro
     ports:
       - "127.0.0.1:2222:2222"

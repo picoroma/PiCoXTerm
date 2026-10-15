@@ -13,7 +13,7 @@ let nodes: SessionNode[] = [root, pw, key]
 
 let cb = 0
 const handlers: Record<string, (args: any) => unknown> = {
-  sessions_list: () => structuredClone(nodes),
+  sessions_list: () => JSON.parse(JSON.stringify(nodes)),
   session_save: ({ node }) => {
     const i = nodes.findIndex((n) => n.id === node.id)
     if (i >= 0) nodes[i] = node
@@ -34,7 +34,8 @@ const handlers: Record<string, (args: any) => unknown> = {
   invoke: async (cmd: string, args: any) => {
     const h = handlers[cmd]
     if (!h) throw new Error(`mock: comando non gestito ${cmd}`)
-    return h(args)
+    // Come l'IPC reale: gli argomenti passano per JSON
+    return h(args === undefined ? args : JSON.parse(JSON.stringify(args)))
   },
   transformCallback: () => ++cb,
   unregisterCallback: () => {},

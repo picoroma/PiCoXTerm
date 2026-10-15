@@ -9,11 +9,14 @@
   let {
     session,
     isNew,
+    candidates,
     onsave,
     oncancel,
   }: {
     session: Session
     isNew: boolean
+    /** Sessioni SSH salvate usabili come jump host. */
+    candidates: Session[]
     onsave: (s: Session, password: string | null, clearPassword: boolean) => void
     oncancel: () => void
   } = $props()
@@ -30,6 +33,12 @@
   let clearSecret = $state(false)
   let notes = $state(initial.notes)
   let tags = $state(initial.ui.tags.join(', '))
+  let jumps = $state<string[]>([...initial.jumpHosts])
+  let jumpToAdd = $state('')
+  const available = $derived(
+    candidates.filter((c) => c.id !== initial.id && c.protocol === 'ssh' && !jumps.includes(c.id)),
+  )
+  const jumpName = (id: string) => candidates.find((c) => c.id === id)?.name ?? `(${t('missingSession')})`
   const hasStoredSecret = initial.credentialRef !== null
 
   const usesSecret = $derived(method === 'password' || method === 'key')
@@ -53,6 +62,19 @@
     if (typeof picked === 'string') keyPath = picked
   }
 
+  function addJump() {
+    if (jumpToAdd && !jumps.includes(jumpToAdd)) jumps = [...jumps, jumpToAdd]
+    jumpToAdd = ''
+  }
+
+  function moveJump(i: number, delta: number) {
+    const j = i + delta
+    if (j < 0 || j >= jumps.length) return
+    const next = [...jumps]
+    ;[next[i], next[j]] = [next[j], next[i]]
+    jumps = next
+  }
+
   function submit(e: Event) {
     e.preventDefault()
     if (!valid) return
@@ -63,6 +85,7 @@
       port,
       username: username.trim(),
       auth: { method, keyPath: method === 'key' ? keyPath.trim() : null },
+      jumpHosts: $state.snapshot(jumps),
       notes,
       ui: {
         ...initial.ui,
@@ -123,6 +146,27 @@
     {#if hasStoredSecret}
       <label class="check"><input type="checkbox" bind:checked={clearSecret} /> {t('clearPassword')}</label>
     {/if}
+    <fieldset>
+      <legend>{t('jumpHosts')}</legend>
+      {#each jumps as id, i (id)}
+        <div class="jump">
+          <span class="grow">{i + 1}. {jumpName(id)}</span>
+          <button type="button" aria-label="↑" disabled={i === 0} onclick={() => moveJump(i, -1)}>↑</button>
+          <button type="button" aria-label="↓" disabled={i === jumps.length - 1} onclick={() => moveJump(i, 1)}>↓</button>
+          <button type="button" aria-label={t('remove')} onclick={() => (jumps = jumps.filter((x) => x !== id))}>✕</button>
+        </div>
+      {/each}
+      <div class="row">
+        <select class="grow" bind:value={jumpToAdd} aria-label={t('jumpHosts')}>
+          <option value="">{t('addJump')}</option>
+          {#each available as c (c.id)}
+            <option value={c.id}>{c.name} ({c.username}@{c.host})</option>
+          {/each}
+        </select>
+        <button type="button" disabled={!jumpToAdd} onclick={addJump}>{t('add')}</button>
+      </div>
+      {#if jumps.length > 0}<p class="hint">{t('jumpHint')}</p>{/if}
+    </fieldset>
     <label>{t('tags')}<input bind:value={tags} placeholder="PRD, SAP" /></label>
     <label>{t('notes')}<textarea rows="3" bind:value={notes}></textarea></label>
   </form>
@@ -159,6 +203,25 @@
   }
   .narrow {
     width: 90px;
+  }
+  fieldset {
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin: 0;
+    color: var(--fg-dim);
+    font-size: 13px;
+  }
+  .jump {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--fg);
+  }
+  .jump button {
+    padding: 2px 8px;
   }
   .hint {
     margin: 0;

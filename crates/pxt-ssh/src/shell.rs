@@ -12,11 +12,17 @@ use crate::auth::{authenticate, Credentials};
 use crate::osc7::Osc7Scanner;
 use crate::{HostKeyStatus, KnownHosts, SshError};
 
-pub struct ConnectParams {
+/// Un salto della catena: l'ultimo è la destinazione, i precedenti sono jump host.
+pub struct Hop {
     pub host: String,
     pub port: u16,
     pub username: String,
     pub auth: Credentials,
+}
+
+pub struct ConnectParams {
+    /// Dal primo jump host alla destinazione (almeno un elemento).
+    pub hops: Vec<Hop>,
     pub cols: u32,
     pub rows: u32,
     pub term: String,
@@ -131,16 +137,59 @@ pub async fn connect_shell(
         keepalive_interval: Some(Duration::from_secs(30)),
         ..Default::default()
     });
-    let handler = Client {
-        host: p.host.clone(),
-        port: p.port,
-        known,
-        verifier,
-    };
-    // Il timeout copre solo il collegamento TCP e lo scambio chiavi, non il dialogo host key.
-    let mut handle = client::connect(config, (p.host.as_str(), p.port), handler).await?;
-
-    authenticate(&mut handle, &p.username, p.auth).await?;
+    let hop_count = p.hops.len();
+    // I salti già attraversati restano aperti finché dura la sessione.
+    let mut upstream: Vec<client::Handle<Client>> = Vec::new();
+    let mut current: Option<client::Handle<Client>> = None;
+    for (i, hop) in p.hops.into_iter().enumerate() {
+        let label = format!("{}:{}", hop.host, hop.port);
+        let handler = Client {
+            host: hop.host.clone(),
+            port: hop.port,
+            known: known.clone(),
+            verifier: verifier.clone(),
+        };
+        let step = async {
+            let mut handle = match current.take() {
+                None => {
+                    client::connect(config.clone(), (hop.host.as_str(), hop.port), handler).await?
+                }
+                Some(prev) => {
+                    // Il salto successivo viaggia dentro un canale direct-tcpip del precedente.
+                    let channel = prev
+                        .channel_open_direct_tcpip(
+                            hop.host.clone(),
+                            u32::from(hop.port),
+                            "127.0.0.1",
+                            0,
+                        )
+                        .await
+                        .map_err(|e| match e {
+                            russh::Error::ChannelOpenFailure(
+                                russh::ChannelOpenFailure::AdministrativelyProhibited,
+                            ) => SshError::ForwardingDenied,
+                            other => other.into(),
+                        })?;
+                    upstream.push(prev);
+                    client::connect_stream(config.clone(), channel.into_stream(), handler).await?
+                }
+            };
+            authenticate(&mut handle, &hop.username, hop.auth).await?;
+            Ok::<_, SshError>(handle)
+        };
+        let handle = step.await.map_err(|e| {
+            if i + 1 < hop_count {
+                SshError::Jump {
+                    host: label,
+                    source: Box::new(e),
+                }
+            } else {
+                e
+            }
+        })?;
+        current = Some(handle);
+    }
+    let handle = current.ok_or_else(|| SshError::Connect("nessun host indicato".into()))?;
 
     let mut channel = handle.channel_open_session().await?;
     channel
@@ -150,7 +199,8 @@ pub async fn connect_shell(
 
     let (tx, mut rx) = mpsc::channel::<Cmd>(256);
     tokio::spawn(async move {
-        let _keep_alive = handle; // chiudere il task chiude la connessione
+        // Chiudere il task chiude la connessione, jump host compresi.
+        let _keep_alive = (handle, upstream);
         let mut exit = None;
         let mut osc7 = Osc7Scanner::new();
         loop {
