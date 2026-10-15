@@ -16,7 +16,7 @@ Riprende da MobaXterm **solo** ciò che serve davvero:
 - **il pannello SFTP che segue la directory corrente del terminale** (la funzione chiave);
 - l'apertura rapida di sessioni RDP, VNC, FTP e S3 dallo stesso albero.
 
-Tutto il resto (server integrati, strumenti di rete, ambiente Unix locale, X server) è **escluso per progetto**, perché è proprio ciò che rende MobaXterm difficile da approvare in ambito aziendale.
+Tutto il resto (server integrati, ambiente Unix locale) è **escluso per progetto**, perché è proprio ciò che rende MobaXterm difficile da approvare in ambito aziendale. Per l'X server e per alcuni strumenti di rete l'esclusione è **sospesa e rinviata** (decisioni D-16 e D-17): se ne riparla dopo la v1, con le cautele descritte in 6.7.
 
 ### 1.1 Principio guida: "auditabile per costruzione"
 
@@ -49,10 +49,10 @@ Queste funzioni **non verranno implementate**, salvo una decisione esplicita reg
 | Funzione MobaXterm | Motivo dell'esclusione |
 |---|---|
 | Server integrati (FTP, TFTP, HTTP, SSH, Telnet, VNC, NFS, iperf) | Trasformano il PC in un server: principale causa di blocco |
-| Port scanner, network scanner, ping/traceroute grafici | Percepiti come strumenti offensivi |
+| Port scanner, network scanner, ping/traceroute grafici | Percepiti come strumenti offensivi. **Da rivalutare dopo la v1** (D-17): si valuteranno solo gli strumenti di diagnosi davvero utili |
 | Gestore di tunnel SSH (MobaSSHTunnel) | Rischio di esfiltrazione; vedi 6.6 per il caso singolo |
 | Shell locale, Cygwin, Busybox, plugin | Binari non controllati dall'EDR |
-| X server integrato | Apre porte in ascolto |
+| X server integrato | Apre porte in ascolto. **Rinviato, non scartato** (D-16): prima l'X11 forwarding verso un X server esterno, vedi 6.7 |
 | Telnet, rlogin, Mosh, seriale | Protocolli in chiaro o fuori perimetro |
 | Editor di testo integrato | Si usa l'editor di sistema (vedi 7.6) |
 | Macro e registrazione di tasti | Fuori perimetro v1 |
@@ -301,7 +301,7 @@ File `policy.json` (opzionale) letto all'avvio da una posizione di sistema (`%Pr
 | Temi (scuro, chiaro, più 2–3 predefiniti) | Sì |
 | Split orizzontale/verticale | M5 |
 | MultiExec (stesso input su più schede) | Backlog, con conferma esplicita |
-| X11 forwarding verso un X server esterno | Backlog, disattivato da policy |
+| X11 forwarding verso un X server esterno | Backlog (fase 1 di 6.7), disattivato da policy |
 
 ### 6.4 SFTP integrato: il pannello che segue la directory
 
@@ -336,6 +336,20 @@ Assente in v1 (SEC-07). Se in futuro servisse (per esempio un tunnel singolo ver
 - registrato nel log di audit.
 
 Nota: un port forward locale apre una porta in ascolto su loopback. Questo va dichiarato esplicitamente come eccezione a SEC-01.
+
+---
+
+### 6.7 X11 e X server (backlog, non prioritario)
+
+Le applicazioni grafiche remote (per esempio SAPinst, `hdbsetup`, gli installer Oracle) richiedono X11. L'esigenza è reale e viene affrontata **a fasi**, dalla meno rischiosa alla più impegnativa:
+
+| Fase | Contenuto | Porte in ascolto | Note |
+|---|---|---|---|
+| 1 | **X11 forwarding verso un X server esterno** (VcXsrv, X410, XQuartz…). PiCoXterm inoltra il canale X11 della sessione SSH e si collega **in uscita** al `DISPLAY` locale | Nessuna aperta da PiCoXterm (l'eventuale ascolto è del server X esterno) | Per sessione, disattivato di default, con avviso; interruttore `allowX11Forwarding` in `policy.json`; evento nel log di audit |
+| 2 | **Avvio guidato** di un X server già installato: rilevamento e avvio con parametri sicuri (accesso solo locale) | Del server X esterno | Nessun binario incluso nel pacchetto |
+| 3 | **X server integrato** | Sì: va dichiarata un'eccezione esplicita a SEC-01, come per il port forwarding (6.6) | Da decidere solo se 1 e 2 non bastano. Preferire socket Unix o named pipe alla porta TCP; costo di realizzazione molto alto; disattivato di default e controllato da policy |
+
+Requisiti comuni: autenticazione X11 con cookie `MIT-MAGIC-COOKIE-1` generato per sessione, mai accesso non autenticato; nessuna esposizione oltre il loopback; tutto registrato nell'audit (5.2). Resta valido SEC-08: nessuna funzione "pericolosa" attiva senza una scelta esplicita dell'utente.
 
 ---
 
@@ -526,6 +540,8 @@ Opzione `sshTunnelVia`: il backend apre un canale `direct-tcpip` su una connessi
 | D-12 | 2026-10-15 | Appunti tramite il plugin ufficiale **tauri-plugin-clipboard-manager**, con i soli permessi `read-text` e `write-text` | `navigator.clipboard` in WebView2 può chiedere permessi a ogni incolla |
 | D-14 | 2026-10-15 | Jump host: catena piatta (max 5) di sessioni SSH salvate, via `direct-tcpip` sulla connessione del salto precedente; le credenziali di ogni jump host devono essere già salvate (keyring), o usare agent / chiave senza passphrase. I `jumpHosts` di un jump host non vengono seguiti | Nessuna porta locale in ascolto (SEC-01); evita dialoghi di password per salti intermedi in v1 |
 | D-15 | 2026-10-15 | Host key: tre scelte per una chiave nuova (accetta una volta / accetta e salva / annulla); chiave cambiata = blocco senza alcuna domanda e dialogo di avviso con le due fingerprint. Si sblocca solo rimuovendo la voce salvata dalle impostazioni (due passaggi, registrato nell'audit) | SEC-03, SEC-04 |
+| D-16 | 2026-10-15 | **X server**: l'esclusione (2.2) diventa un **rinvio**. Si farà a fasi dopo la v1 (6.7): 1) X11 forwarding verso un X server esterno; 2) avvio guidato di un X server installato; 3) X server integrato solo se necessario, con eccezione esplicita a SEC-01 | Richiesta dell'utente (comodo per le applicazioni grafiche SAP); la fase 1 non apre porte, le successive richiedono cautele |
+| D-17 | 2026-10-15 | **Strumenti di rete** (diagnosi): da rivalutare dopo la v1; per ora restano esclusi. Quando se ne parlerà si sceglieranno singoli strumenti di diagnosi utili e non offensivi, ciascuno con una decisione propria | Richiesta dell'utente ("potrebbero tornare utili"); evitare di tornare agli strumenti percepiti come offensivi |
 | D-13 | 2026-10-15 | Esito spike M0: **go** sullo stack. Rischio aperto su NFR-03 (memoria, ~273 MB a riposo per via di WebView2) | Vedi `docs/spike-m0.md` |
 
 ---
@@ -537,3 +553,5 @@ Opzione `sshTunnelVia`: il backend apre un canale `direct-tcpip` su una connessi
 3. Nei landscape dei clienti ci sono ancora sistemi con soli algoritmi SSH legacy (`ssh-rsa` SHA-1, `diffie-hellman-group1`)? Quali?
 4. Il port forwarding locale (6.6) serve davvero per SAP GUI/HANA Studio, o si usa già un'altra via (VPN, Devolutions Gateway)?
 5. FTP in modalità attiva: si può escludere del tutto?
+6. X11 (6.7): per quali applicazioni serve davvero (SAPinst, `hdbsetup`, installer Oracle, altro) e quale X server esterno si usa già (VcXsrv, X410, altro)?
+7. Strumenti di rete (D-17): quali servono nella pratica (per esempio ping, traceroute, verifica di una porta)?

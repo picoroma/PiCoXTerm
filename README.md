@@ -8,7 +8,7 @@ Client di accesso remoto leggero, ispirato a MobaXterm ma essenziale e "auditabi
 - Sessioni salvate in locale (JSON) e password nel keyring di sistema; integrazione con Devolutions Remote Desktop Manager in roadmap
 - Windows, Linux, macOS · Tauri 2 + Rust
 
-Cosa **non** fa, per scelta: nessun server integrato, nessuna porta in ascolto, nessuno strumento di rete, nessuna shell locale, nessun X server.
+Cosa **non** fa, per scelta: nessun server integrato, nessuna porta in ascolto, nessuna shell locale. X server (a fasi) e alcuni strumenti di rete di diagnosi sono previsti in backlog, dopo la v1.
 
 ## Documentazione
 

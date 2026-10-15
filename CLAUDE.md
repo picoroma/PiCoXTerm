@@ -19,7 +19,7 @@ Documenti di riferimento (leggerli prima di iniziare una milestone):
 
 ## Regole non negoziabili
 
-1. **Zero porte in ascolto.** Nessun server, nessun proxy WebSocket locale, nessun listener. Solo connessioni in uscita.
+1. **Zero porte in ascolto.** Nessun server, nessun proxy WebSocket locale, nessun listener. Solo connessioni in uscita. (Eventuali eccezioni future, come l'X server integrato di 6.7 fase 3, vanno dichiarate esplicitamente nelle specifiche.)
 2. **Nessun segreto su disco in chiaro, né nei log.** Password, passphrase e secret key passano solo da `SecretProvider`.
 3. **Nessuna funzione esclusa** dalla sezione 2.2 delle specifiche senza una nuova decisione registrata nella sezione 12.
 4. **I crate `pxt-*` non dipendono da Tauri.**

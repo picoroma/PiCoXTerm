@@ -192,7 +192,10 @@ In ordine di valore stimato, da ripriorizzare dopo l'uso reale:
 | **SFTP via sudo** (sftp-server avviato con `sudo -u <sid>adm`) | Molto utile per SAP Basis; da valutare la sicurezza |
 | MultiExec (stesso input su più schede) | Con conferma esplicita |
 | Port forwarding locale singolo | Solo se la domanda aperta 4 delle specifiche lo conferma; controllato da policy |
-| X11 forwarding verso X server esterno | Disattivato da policy |
+| **X11 forwarding** verso X server esterno (fase 1 di 6.7) | Per SAPinst, `hdbsetup`, installer Oracle; per sessione, disattivato da policy e di default |
+| Avvio guidato di un X server installato (fase 2) | Rilevamento e avvio di VcXsrv/X410, senza includerli |
+| X server integrato (fase 3) | Solo se 1 e 2 non bastano: richiede un'eccezione esplicita a SEC-01 (D-16) |
+| Strumenti di rete di diagnosi | Da rivalutare dopo la v1 (D-17), scegliendo i singoli strumenti utili e non offensivi |
 | Import da PuTTY e `~/.ssh/config` | |
 | Certificati SSH | |
 | Provider KeePass (.kdbx) | Per chi non usa RDM |
