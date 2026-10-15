@@ -100,3 +100,16 @@ async fn missing_key_file_is_reported() {
     .unwrap_err();
     assert!(matches!(err, SshError::Key(_)), "{err:?}");
 }
+
+#[tokio::test]
+#[ignore = "richiede il container di testenv"]
+async fn unencrypted_key_with_stray_passphrase() {
+    // Succede quando una sessione passa da password a chiave e il vecchio segreto resta salvato.
+    let r = try_connect(Credentials::Key {
+        path: key("id_plain"),
+        passphrase: Some("test".into()),
+    })
+    .await;
+    println!("risultato: {r:?}");
+    assert!(r.is_ok(), "{r:?}");
+}

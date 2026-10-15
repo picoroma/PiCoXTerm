@@ -101,9 +101,10 @@
     menu = { x: e.clientX, y: e.clientY, node }
   }
 
+  /** Esegue l'azione e poi chiude il menu: le voci leggono `target` dal menu ancora aperto. */
   function pick(action: () => void) {
-    menu = null
     action()
+    menu = null
   }
 
   /** Cartella in cui creare: la cartella stessa, il padre di una sessione, o la radice. */
