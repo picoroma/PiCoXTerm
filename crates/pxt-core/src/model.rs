@@ -161,6 +161,20 @@ pub struct Session {
 }
 
 impl Session {
+    /// Copia con nuovo id e nuovi timestamp. Il riferimento alla credenziale viene tolto:
+    /// chi duplica decide se copiare anche il segreto (con un nuovo riferimento).
+    pub fn duplicate(&self, name: String) -> Session {
+        let now = Utc::now();
+        Session {
+            id: Uuid::new_v4(),
+            name,
+            credential_ref: None,
+            created_at: now,
+            updated_at: now,
+            ..self.clone()
+        }
+    }
+
     /// Nuova sessione SSH con password, valori di default per il resto.
     pub fn new_ssh(name: &str, host: &str, port: u16, username: &str) -> Self {
         let now = Utc::now();
@@ -282,6 +296,25 @@ mod tests {
         assert_eq!(v["credentialRef"]["provider"], "local");
         // Nessun campo che possa contenere una password
         assert!(v.get("password").is_none());
+    }
+
+    #[test]
+    fn duplicate_gets_new_identity_and_no_credential() {
+        let mut s = Session::new_ssh("app", "h", 22, "u");
+        s.credential_ref = Some(CredentialRef::new_local());
+        s.jump_hosts = vec![Uuid::new_v4()];
+        s.ui.tags = vec!["PRD".into()];
+        let d = s.duplicate("app (copia)".into());
+        assert_ne!(d.id, s.id);
+        assert_eq!(d.name, "app (copia)");
+        assert!(d.credential_ref.is_none());
+        assert_eq!(
+            (d.host.as_str(), d.port, d.parent_id),
+            ("h", 22, s.parent_id)
+        );
+        assert_eq!(d.jump_hosts, s.jump_hosts);
+        assert_eq!(d.ui.tags, s.ui.tags);
+        assert!(s.credential_ref.is_some(), "l'originale non cambia");
     }
 
     #[test]

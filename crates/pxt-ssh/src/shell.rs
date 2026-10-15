@@ -136,23 +136,30 @@ impl Handler for Client {
     }
 }
 
-/// Apre la connessione, autentica, apre una shell con PTY.
-/// L'output arriva su `events`; l'input si invia con i metodi di [`Shell`].
-pub async fn connect_shell(
-    p: ConnectParams,
-    known: KnownHosts,
-    verifier: HostKeyVerifier,
-    events: mpsc::Sender<ShellEvent>,
-) -> Result<Shell, SshError> {
+/// Catena di connessioni già autenticate: l'ultima è la destinazione, le altre sono i jump host.
+struct Chain {
+    handle: client::Handle<Client>,
+    /// I salti già attraversati restano aperti finché dura la sessione.
+    upstream: Vec<client::Handle<Client>>,
+}
+
+/// Collega e autentica ogni salto, dal primo jump host alla destinazione.
+/// `step_timeout`: limite per ogni salto (da non usare se serve attendere una risposta dell'utente).
+async fn connect_chain(
+    hops: Vec<Hop>,
+    known: &KnownHosts,
+    verifier: &HostKeyVerifier,
+    step_timeout: Option<Duration>,
+) -> Result<Chain, SshError> {
     let config = Arc::new(client::Config {
         keepalive_interval: Some(Duration::from_secs(30)),
         ..Default::default()
     });
-    let hop_count = p.hops.len();
+    let hop_count = hops.len();
     // I salti già attraversati restano aperti finché dura la sessione.
     let mut upstream: Vec<client::Handle<Client>> = Vec::new();
     let mut current: Option<client::Handle<Client>> = None;
-    for (i, hop) in p.hops.into_iter().enumerate() {
+    for (i, hop) in hops.into_iter().enumerate() {
         let label = format!("{}:{}", hop.host, hop.port);
         let handler = Client {
             host: hop.host.clone(),
@@ -188,7 +195,13 @@ pub async fn connect_shell(
             authenticate(&mut handle, &hop.username, hop.auth).await?;
             Ok::<_, SshError>(handle)
         };
-        let handle = step.await.map_err(|e| {
+        let result = match step_timeout {
+            Some(limit) => tokio::time::timeout(limit, step)
+                .await
+                .unwrap_or(Err(SshError::Timeout(limit.as_secs()))),
+            None => step.await,
+        };
+        let handle = result.map_err(|e| {
             if i + 1 < hop_count {
                 SshError::Jump {
                     host: label,
@@ -207,6 +220,43 @@ pub async fn connect_shell(
         current = Some(handle);
     }
     let handle = current.ok_or_else(|| SshError::Connect("nessun host indicato".into()))?;
+    Ok(Chain { handle, upstream })
+}
+
+/// Esito di una prova di connessione.
+#[derive(Debug, Clone, Copy)]
+pub struct TestReport {
+    /// Tempo totale per collegare e autenticare tutti i salti.
+    pub elapsed_ms: u64,
+}
+
+/// Verifica raggiungibilità e autenticazione fino alla destinazione, senza aprire una shell.
+/// Con un `verifier` che rifiuta le chiavi sconosciute non si fida di nulla e non salva nulla.
+pub async fn test_connection(
+    hops: Vec<Hop>,
+    known: KnownHosts,
+    verifier: HostKeyVerifier,
+    timeout: Duration,
+) -> Result<TestReport, SshError> {
+    let started = std::time::Instant::now();
+    let chain = connect_chain(hops, &known, &verifier, Some(timeout)).await?;
+    let elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+    let _ = chain
+        .handle
+        .disconnect(russh::Disconnect::ByApplication, "test", "en")
+        .await;
+    Ok(TestReport { elapsed_ms })
+}
+
+/// Apre la connessione, autentica, apre una shell con PTY.
+/// L'output arriva su `events`; l'input si invia con i metodi di [`Shell`].
+pub async fn connect_shell(
+    p: ConnectParams,
+    known: KnownHosts,
+    verifier: HostKeyVerifier,
+    events: mpsc::Sender<ShellEvent>,
+) -> Result<Shell, SshError> {
+    let Chain { handle, upstream } = connect_chain(p.hops, &known, &verifier, None).await?;
 
     let mut channel = handle.channel_open_session().await?;
     channel

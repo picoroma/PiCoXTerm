@@ -224,6 +224,30 @@ async fn session_save(
     Ok(node)
 }
 
+/// Duplica una sessione. Se ha una password nel keyring, la copia ne riceve una propria (stesso valore).
+#[tauri::command]
+async fn session_duplicate(
+    state: Shared<'_>,
+    id: Uuid,
+    copy_suffix: String,
+) -> Result<SessionNode, String> {
+    let nodes = state.sessions.list().await.map_err(err)?;
+    let Some(SessionNode::Session(original)) = nodes.iter().find(|n| n.id() == id) else {
+        return Err("sessione non trovata".into());
+    };
+    let mut copy = original.duplicate(format!("{} {}", original.name, copy_suffix.trim()));
+    if let Some(r) = &original.credential_ref {
+        if let Some(secret) = state.secrets.get(r).await.map_err(err)? {
+            let new_ref = CredentialRef::new_local();
+            state.secrets.set(&new_ref, secret).await.map_err(err)?;
+            copy.credential_ref = Some(new_ref);
+        }
+    }
+    let node = SessionNode::Session(Box::new(copy));
+    state.sessions.save(node.clone()).await.map_err(err)?;
+    Ok(node)
+}
+
 /// Elimina il nodo (e il suo contenuto) insieme alle password salvate.
 /// Esporta le sessioni (senza segreti) nel file scelto dall'utente.
 #[tauri::command]
@@ -345,6 +369,176 @@ fn build_credentials(
     }
 }
 
+/// Jump host: le credenziali devono essere già salvate (o agent / chiave senza passphrase).
+async fn jump_hops(
+    state: &AppState,
+    nodes: &[SessionNode],
+    jump_ids: &[Uuid],
+) -> Result<Vec<Hop>, String> {
+    let mut hops = Vec::new();
+    for jid in jump_ids {
+        let Some(SessionNode::Session(j)) = nodes.iter().find(|n| n.id() == *jid) else {
+            return Err("jump host non trovato (sessione eliminata?)".into());
+        };
+        let ep = Endpoint::of(j);
+        let secret = stored_secret(state, &ep.credential_ref).await?;
+        let auth =
+            build_credentials(ep.method, ep.key_path.clone(), secret).map_err(|e| match e {
+                CredError::NeedSecret => format!(
+                    "jump host \"{}\": password non salvata (salvala nella sessione del jump host)",
+                    j.name
+                ),
+                CredError::Other(m) => format!("jump host \"{}\": {m}", j.name),
+            })?;
+        hops.push(Hop {
+            host: ep.host,
+            port: ep.port,
+            username: ep.username,
+            auth,
+        });
+    }
+    Ok(hops)
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TestResult {
+    /// `ok`, `needSecret`, `unknownHostKey`, `hostKeyChanged` o `error`.
+    status: &'static str,
+    message: String,
+    elapsed_ms: Option<u64>,
+    key_type: Option<String>,
+    fingerprint: Option<String>,
+}
+
+impl TestResult {
+    fn new(status: &'static str, message: impl Into<String>) -> Self {
+        Self {
+            status,
+            message: message.into(),
+            elapsed_ms: None,
+            key_type: None,
+            fingerprint: None,
+        }
+    }
+}
+
+/// Prova una sessione (anche non ancora salvata) senza aprire la shell.
+/// Non si fida mai di una host key sconosciuta e non salva nulla: la riporta soltanto.
+#[tauri::command]
+async fn session_test(
+    state: Shared<'_>,
+    session: Session,
+    password: Option<String>,
+) -> Result<TestResult, String> {
+    if session.protocol != Protocol::Ssh {
+        return Ok(TestResult::new("error", "protocollo non ancora supportato"));
+    }
+    let nodes = state.sessions.list().await.map_err(err)?;
+    let mut hops = jump_hops(&state, &nodes, &session.jump_hosts).await?;
+
+    let dest = Endpoint::of(&session);
+    let secret = match password {
+        Some(p) if !p.is_empty() => Some(p),
+        _ => stored_secret(&state, &dest.credential_ref).await?,
+    };
+    let auth = match build_credentials(dest.method, dest.key_path.clone(), secret) {
+        Ok(a) => a,
+        Err(CredError::NeedSecret) => {
+            return Ok(TestResult::new(
+                "needSecret",
+                "Inserisci la password nel campo per provare la connessione.",
+            ))
+        }
+        Err(CredError::Other(m)) => return Ok(TestResult::new("error", m)),
+    };
+    let ctx = AuditCtx {
+        host: dest.host.clone(),
+        port: dest.port,
+        user: dest.username.clone(),
+        via: hops
+            .iter()
+            .map(|h| format!("{}:{}", h.host, h.port))
+            .collect(),
+    };
+    hops.push(Hop {
+        host: dest.host,
+        port: dest.port,
+        username: dest.username,
+        auth,
+    });
+
+    // Chiave sconosciuta: il test la ricorda ma risponde "no" (non si fida e non salva).
+    let unknown: Arc<Mutex<Option<HostKeyInfo>>> = Arc::new(Mutex::new(None));
+    let verifier: HostKeyVerifier = {
+        let unknown = Arc::clone(&unknown);
+        Arc::new(move |info: HostKeyInfo| {
+            let unknown = Arc::clone(&unknown);
+            Box::pin(async move {
+                unknown.lock().unwrap().get_or_insert(info);
+                HostKeyDecision::Reject
+            })
+        })
+    };
+
+    let outcome = pxt_ssh::test_connection(
+        hops,
+        KnownHosts::new(state.known_hosts.clone()),
+        verifier,
+        std::time::Duration::from_secs(15),
+    )
+    .await;
+
+    Ok(match outcome {
+        Ok(report) => {
+            state.audit(&ctx, "connection_test", Outcome::Ok, None);
+            let mut r = TestResult::new("ok", "Connessione e autenticazione riuscite.");
+            r.elapsed_ms = Some(report.elapsed_ms);
+            r
+        }
+        Err(SshError::HostKeyRejected) if unknown.lock().unwrap().is_some() => {
+            let info = unknown.lock().unwrap().take().unwrap();
+            state.audit(
+                &ctx,
+                "connection_test",
+                Outcome::Ok,
+                Some("host raggiungibile, host key non ancora salvata".into()),
+            );
+            let mut r = TestResult::new(
+                "unknownHostKey",
+                "Il server risponde, ma la sua host key non è ancora salvata. Apri la sessione una volta per verificarla e accettarla.",
+            );
+            r.key_type = Some(info.key_type);
+            r.fingerprint = Some(info.fingerprint);
+            r
+        }
+        Err(SshError::PassphraseRequired) => TestResult::new(
+            "needSecret",
+            "La chiave privata è cifrata: inserisci la passphrase nel campo per provare.",
+        ),
+        Err(e) => {
+            let status = if hostkey_changed(&e).is_some() {
+                state.audit(
+                    &ctx,
+                    "hostkey_changed",
+                    Outcome::Failed,
+                    Some(e.to_string()),
+                );
+                "hostKeyChanged"
+            } else {
+                state.audit(
+                    &ctx,
+                    "connection_test",
+                    Outcome::Failed,
+                    Some(e.to_string()),
+                );
+                "error"
+            };
+            TestResult::new(status, e.to_string())
+        }
+    })
+}
+
 #[allow(clippy::too_many_arguments)]
 #[tauri::command]
 async fn ssh_connect(
@@ -382,29 +576,7 @@ async fn ssh_connect(
         return Err(format!("troppi jump host (massimo {MAX_JUMPS})"));
     }
 
-    // Jump host: le credenziali devono essere già salvate (o agent / chiave senza passphrase).
-    let mut hops = Vec::new();
-    for jid in &jump_ids {
-        let Some(SessionNode::Session(j)) = nodes.iter().find(|n| n.id() == *jid) else {
-            return Err("jump host non trovato (sessione eliminata?)".into());
-        };
-        let ep = Endpoint::of(j);
-        let secret = stored_secret(&state, &ep.credential_ref).await?;
-        let auth =
-            build_credentials(ep.method, ep.key_path.clone(), secret).map_err(|e| match e {
-                CredError::NeedSecret => format!(
-                    "jump host \"{}\": password non salvata (salvala nella sessione del jump host)",
-                    j.name
-                ),
-                CredError::Other(m) => format!("jump host \"{}\": {m}", j.name),
-            })?;
-        hops.push(Hop {
-            host: ep.host,
-            port: ep.port,
-            username: ep.username,
-            auth,
-        });
-    }
+    let mut hops = jump_hops(&state, &nodes, &jump_ids).await?;
 
     // Destinazione: segreto fornito ora dall'utente, altrimenti quello nel keyring (se c'è).
     let secret = match request.password {
@@ -661,6 +833,8 @@ pub fn run() {
             session_delete,
             sessions_export,
             sessions_import,
+            session_test,
+            session_duplicate,
             ssh_connect,
             ssh_write,
             ssh_resize,

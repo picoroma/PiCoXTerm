@@ -11,6 +11,6 @@ pub use auth::Credentials;
 pub use error::SshError;
 pub use known_hosts::{HostKeyStatus, KnownHostEntry, KnownHosts};
 pub use shell::{
-    connect_shell, ConnectParams, Hop, HostKeyDecision, HostKeyInfo, HostKeyVerifier, Shell,
-    ShellEvent,
+    connect_shell, test_connection, ConnectParams, Hop, HostKeyDecision, HostKeyInfo,
+    HostKeyVerifier, Shell, ShellEvent, TestReport,
 };

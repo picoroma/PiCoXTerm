@@ -109,6 +109,15 @@ const it: Dict = {
   removeHostKey: 'Rimuovi',
   confirmRemove: 'Conferma',
   knownHostsHint: 'Dopo la rimozione, al prossimo accesso verrà chiesto di confermare la chiave del server.',
+  duplicate: 'Duplica',
+  copySuffix: '(copia)',
+  testConnection: 'Prova connessione',
+  testing: 'Prova in corso…',
+  testOk: 'Connessione riuscita in {ms} ms',
+  testUnknownKey: 'Host raggiungibile, host key non ancora salvata',
+  testNeedSecret: 'Serve la password o la passphrase',
+  testKeyChanged: 'HOST KEY CAMBIATA: connessione bloccata',
+  testFailed: 'Prova non riuscita',
   loadError: 'Impossibile leggere le sessioni',
 }
 
@@ -221,6 +230,15 @@ const en: Dict = {
   removeHostKey: 'Remove',
   confirmRemove: 'Confirm',
   knownHostsHint: 'After removal, you will be asked to confirm the server key at the next access.',
+  duplicate: 'Duplicate',
+  copySuffix: '(copy)',
+  testConnection: 'Test connection',
+  testing: 'Testing…',
+  testOk: 'Connection succeeded in {ms} ms',
+  testUnknownKey: 'Host reachable, host key not saved yet',
+  testNeedSecret: 'Password or passphrase needed',
+  testKeyChanged: 'HOST KEY CHANGED: connection blocked',
+  testFailed: 'Test failed',
   loadError: 'Unable to read the sessions',
 }
 

@@ -6,7 +6,7 @@
   import TerminalTab from './lib/TerminalTab.svelte'
   import SettingsDialog from './lib/SettingsDialog.svelte'
   import { loadSettings } from './lib/settings.svelte'
-  import { deleteNode, listNodes, saveNode } from './lib/api'
+  import { deleteNode, duplicateSession, listNodes, saveNode } from './lib/api'
   import { newFolder, newSession, type Folder, type Session, type SessionNode, type Target, type Uuid } from './lib/types'
   import { t } from './i18n'
 
@@ -146,6 +146,7 @@
       {nodes}
       onopen={openSession}
       onedit={(s) => (editing = { session: $state.snapshot(s) as Session, isNew: false })}
+      onduplicate={(s) => run(() => duplicateSession(s.id, t('copySuffix')))}
       onnewsession={startNewSession}
       onnewfolder={startNewFolder}
       onrename={startRename}

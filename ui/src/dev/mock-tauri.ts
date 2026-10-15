@@ -40,6 +40,17 @@ let settings: any = {
 }
 const handlers: Record<string, (args: any) => unknown> = {
   settings_get: () => settings,
+  session_test: ({ session }) => {
+    if (session.host === 'newhost') return { status: 'unknownHostKey', message: 'Il server risponde, ma la sua host key non è ancora salvata.', elapsedMs: null, keyType: 'ssh-ed25519', fingerprint: 'SHA256:xyzxyz' }
+    if (session.host === 'bad') return { status: 'error', message: 'autenticazione rifiutata dal server', elapsedMs: null, keyType: null, fingerprint: null }
+    return { status: 'ok', message: 'Connessione e autenticazione riuscite.', elapsedMs: 123, keyType: null, fingerprint: null }
+  },
+  session_duplicate: ({ id, copySuffix }) => {
+    const orig: any = nodes.find((n) => n.id === id)
+    const copy = { ...JSON.parse(JSON.stringify(orig)), id: crypto.randomUUID(), name: `${orig.name} ${copySuffix}`, credentialRef: null }
+    nodes.push(copy)
+    return copy
+  },
   ssh_resize: () => {},
   ssh_write: () => {},
   ssh_close: () => {},

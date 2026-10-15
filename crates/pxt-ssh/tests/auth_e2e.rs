@@ -295,3 +295,82 @@ async fn changed_host_key_is_blocked_without_asking_and_unlocks_only_after_remov
     r.unwrap();
     assert_eq!(asked, 1);
 }
+
+// ---- Test connessione ----
+
+async fn run_test(
+    hops: Vec<Hop>,
+    known: KnownHosts,
+    decision: HostKeyDecision,
+) -> Result<u64, SshError> {
+    let verifier: HostKeyVerifier = Arc::new(move |_| Box::pin(async move { decision }));
+    pxt_ssh::test_connection(hops, known, verifier, std::time::Duration::from_secs(5))
+        .await
+        .map(|r| r.elapsed_ms)
+}
+
+#[tokio::test]
+#[ignore = "richiede il container di testenv"]
+async fn test_connection_ok_through_a_jump_host_and_leaves_no_trace() {
+    let known = fresh_known();
+    let ms = run_test(
+        vec![
+            hop(Credentials::Password("test".into())),
+            hop(Credentials::Password("test".into())),
+        ],
+        known.clone(),
+        HostKeyDecision::AcceptOnce,
+    )
+    .await
+    .unwrap();
+    assert!(ms < 5000);
+    assert!(
+        known.list().unwrap().is_empty(),
+        "il test non deve salvare nulla"
+    );
+}
+
+#[tokio::test]
+#[ignore = "richiede il container di testenv"]
+async fn test_connection_reports_auth_failure_unknown_key_and_timeout() {
+    let err = run_test(
+        vec![hop(Credentials::Password("sbagliata".into()))],
+        fresh_known(),
+        HostKeyDecision::AcceptOnce,
+    )
+    .await
+    .unwrap_err();
+    assert!(matches!(err, SshError::AuthFailed), "{err:?}");
+
+    // Chiave sconosciuta e il test non si fida: si ferma prima di autenticarsi.
+    let err = run_test(
+        vec![hop(Credentials::Password("test".into()))],
+        fresh_known(),
+        HostKeyDecision::Reject,
+    )
+    .await
+    .unwrap_err();
+    assert!(matches!(err, SshError::HostKeyRejected), "{err:?}");
+
+    // Indirizzo non instradabile: deve scadere, non restare appeso.
+    let verifier: HostKeyVerifier = Arc::new(|_| Box::pin(async { HostKeyDecision::Reject }));
+    let started = std::time::Instant::now();
+    let err = pxt_ssh::test_connection(
+        vec![Hop {
+            host: "10.255.255.1".into(),
+            port: 22,
+            username: "x".into(),
+            auth: Credentials::Password("x".into()),
+        }],
+        fresh_known(),
+        verifier,
+        std::time::Duration::from_secs(1),
+    )
+    .await
+    .unwrap_err();
+    assert!(started.elapsed() < std::time::Duration::from_secs(4));
+    assert!(
+        matches!(err, SshError::Timeout(1) | SshError::Target { .. }),
+        "{err:?}"
+    );
+}

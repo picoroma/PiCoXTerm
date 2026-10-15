@@ -1,5 +1,6 @@
 <script lang="ts">
   import { untrack } from 'svelte'
+  import { testSession, type TestResult } from './api'
   import { homeDir, join } from '@tauri-apps/api/path'
   import { open } from '@tauri-apps/plugin-dialog'
   import Modal from './Modal.svelte'
@@ -83,10 +84,9 @@
     jumps = next
   }
 
-  function submit(e: Event) {
-    e.preventDefault()
-    if (!valid) return
-    const updated: Session = {
+  /** La sessione com'è ora nel dialogo, anche se non ancora salvata. */
+  function draft(): Session {
+    return {
       ...initial,
       name: name.trim() || host.trim(),
       host: host.trim(),
@@ -109,7 +109,27 @@
       },
       updatedAt: new Date().toISOString(),
     }
-    onsave(updated, secret === '' ? null : secret, clearSecret && secret === '')
+  }
+
+  let testing = $state(false)
+  let testResult = $state<TestResult | null>(null)
+
+  async function runTest() {
+    testing = true
+    testResult = null
+    try {
+      testResult = await testSession(draft(), secret === '' ? null : secret)
+    } catch (e) {
+      testResult = { status: 'error', message: String(e), elapsedMs: null, keyType: null, fingerprint: null }
+    } finally {
+      testing = false
+    }
+  }
+
+  function submit(e: Event) {
+    e.preventDefault()
+    if (!valid) return
+    onsave(draft(), secret === '' ? null : secret, clearSecret && secret === '')
   }
 </script>
 
@@ -205,7 +225,23 @@
     <label>{t('tags')}<input bind:value={tags} placeholder="PRD, SAP" /></label>
     <label>{t('notes')}<textarea rows="3" bind:value={notes}></textarea></label>
   </form>
+  {#if testResult}
+    <div class="test {testResult.status}" role="status">
+      <strong>
+        {#if testResult.status === 'ok'}✓ {t('testOk', { ms: testResult.elapsedMs ?? 0 })}
+        {:else if testResult.status === 'unknownHostKey'}ⓘ {t('testUnknownKey')}
+        {:else if testResult.status === 'needSecret'}ⓘ {t('testNeedSecret')}
+        {:else if testResult.status === 'hostKeyChanged'}⚠ {t('testKeyChanged')}
+        {:else}✕ {t('testFailed')}{/if}
+      </strong>
+      <div>{testResult.message}</div>
+      {#if testResult.fingerprint}<div class="mono">{testResult.keyType} {testResult.fingerprint}</div>{/if}
+    </div>
+  {/if}
   {#snippet actions()}
+    <button type="button" class="left" disabled={!valid || testing} onclick={runTest}>
+      {testing ? t('testing') : t('testConnection')}
+    </button>
     <button type="button" onclick={oncancel}>{t('cancel')}</button>
     <button type="submit" form="session-form" class="primary" disabled={!valid}>{t('save')}</button>
   {/snippet}
@@ -266,6 +302,33 @@
     padding: 0 2px;
     height: 28px;
     width: 44px;
+  }
+  .test {
+    margin-top: 12px;
+    padding: 8px 10px;
+    border-radius: 4px;
+    border: 1px solid var(--border);
+    font-size: 13px;
+    word-break: break-word;
+  }
+  .test.ok {
+    border-color: #5cb85c;
+  }
+  .test.unknownHostKey,
+  .test.needSecret {
+    border-color: #f0ad4e;
+  }
+  .test.error,
+  .test.hostKeyChanged {
+    border-color: var(--danger);
+  }
+  .test .mono {
+    font-family: Consolas, monospace;
+    font-size: 12px;
+    margin-top: 4px;
+  }
+  .left {
+    margin-right: auto;
   }
   .hint {
     margin: 0;

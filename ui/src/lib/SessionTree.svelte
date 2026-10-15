@@ -6,6 +6,7 @@
     nodes,
     onopen,
     onedit,
+    onduplicate,
     onnewsession,
     onnewfolder,
     onrename,
@@ -15,6 +16,7 @@
     nodes: SessionNode[]
     onopen: (s: Session) => void
     onedit: (s: Session) => void
+    onduplicate: (s: Session) => void
     onnewsession: (parentId: Uuid | null) => void
     onnewfolder: (parentId: Uuid | null) => void
     onrename: (f: Folder) => void
@@ -253,6 +255,7 @@
     {#if target?.type === 'session'}
       <button role="menuitem" onclick={() => pick(() => onopen(target))}>{t('open')}</button>
       <button role="menuitem" onclick={() => pick(() => onedit(target))}>{t('edit')}</button>
+      <button role="menuitem" onclick={() => pick(() => onduplicate(target))}>{t('duplicate')}</button>
     {/if}
     {#if target?.type === 'folder'}
       <button role="menuitem" onclick={() => pick(() => onrename(target))}>{t('rename')}</button>
