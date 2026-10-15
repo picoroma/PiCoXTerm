@@ -3,5 +3,9 @@
   "identifier": "default",
   "description": "Capability minima per la finestra principale",
   "windows": ["main"],
-  "permissions": ["core:default"]
+  "permissions": [
+    "core:default",
+    "clipboard-manager:allow-read-text",
+    "clipboard-manager:allow-write-text"
+  ]
 }

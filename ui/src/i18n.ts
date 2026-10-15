@@ -17,6 +17,9 @@ const it: Dict = {
   keyType: 'Tipo di chiave',
   injectCwd: 'Attiva tracciamento cwd',
   cwd: 'Directory',
+  pasteTitle: 'Incollare più righe?',
+  pasteBody: 'Stai incollando {n} righe: ogni riga verrà eseguita dalla shell.',
+  paste: 'Incolla',
 }
 
 const en: Dict = {
@@ -36,6 +39,9 @@ const en: Dict = {
   keyType: 'Key type',
   injectCwd: 'Enable cwd tracking',
   cwd: 'Directory',
+  pasteTitle: 'Paste multiple lines?',
+  pasteBody: 'You are pasting {n} lines: the shell will run each one.',
+  paste: 'Paste',
 }
 
 const dicts: Record<string, Dict> = { it, en }

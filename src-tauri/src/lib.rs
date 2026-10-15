@@ -195,6 +195,7 @@ fn hostkey_reply(state: State<'_, Arc<AppState>>, req_id: u64, accept: bool) {
 
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_clipboard_manager::init())
         .manage(Arc::new(AppState::default()))
         .invoke_handler(tauri::generate_handler![
             app_info,

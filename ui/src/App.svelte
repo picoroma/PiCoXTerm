@@ -3,6 +3,7 @@
   import { Terminal } from '@xterm/xterm'
   import { FitAddon } from '@xterm/addon-fit'
   import '@xterm/xterm/css/xterm.css'
+  import { readText, writeText } from '@tauri-apps/plugin-clipboard-manager'
   import { t } from './i18n'
 
   type TermEvent =
@@ -18,6 +19,7 @@
   let error = $state('')
   let cwd = $state('')
   let injectShell = $state('bash')
+  let pendingPaste = $state<string | null>(null)
   let hostKeyPrompt = $state<Extract<TermEvent, { type: 'hostKey' }> | null>(null)
 
   let termEl: HTMLDivElement
@@ -32,6 +34,28 @@
     resizeObs = null
     term?.dispose()
     term = null
+  }
+
+  async function copySelection() {
+    const sel = term?.getSelection()
+    if (sel) await writeText(sel)
+  }
+
+  async function pasteFromClipboard() {
+    const text = await readText().catch(() => '')
+    if (!text) return
+    if (text.trim().includes('\n')) {
+      pendingPaste = text
+    } else {
+      term?.paste(text)
+    }
+  }
+
+  function confirmPaste(ok: boolean) {
+    const text = pendingPaste
+    pendingPaste = null
+    if (ok && text) term?.paste(text)
+    term?.focus()
   }
 
   async function connect(e: Event) {
@@ -50,6 +74,21 @@
     term.loadAddon(fit)
     term.open(termEl)
     fit.fit()
+    // Copia su selezione; Ctrl+Shift+C / Ctrl+Shift+V come alternativa da tastiera
+    term.onSelectionChange(() => void copySelection())
+    term.attachCustomKeyEventHandler((ev) => {
+      if (ev.type === 'keydown' && ev.ctrlKey && ev.shiftKey) {
+        if (ev.code === 'KeyC') {
+          void copySelection()
+          return false
+        }
+        if (ev.code === 'KeyV') {
+          void pasteFromClipboard()
+          return false
+        }
+      }
+      return true
+    })
 
     const onData = new Channel<ArrayBuffer | number[]>()
     onData.onmessage = (buf) => {
@@ -139,8 +178,30 @@
   </form>
   {#if error}<div class="error">{error}</div>{/if}
 
-  <div class="term" bind:this={termEl}></div>
+  <div
+    class="term"
+    role="presentation"
+    bind:this={termEl}
+    oncontextmenu={(e) => {
+      e.preventDefault()
+      void pasteFromClipboard()
+    }}
+  ></div>
   <div class="status">{t('cwd')}: {cwd || '—'}</div>
+
+  {#if pendingPaste !== null}
+    <div class="backdrop">
+      <div class="dialog" role="alertdialog" aria-labelledby="pp-title">
+        <h2 id="pp-title">{t('pasteTitle')}</h2>
+        <p>{t('pasteBody').replace('{n}', String(pendingPaste.split('\n').length))}</p>
+        <pre class="preview">{pendingPaste.slice(0, 400)}</pre>
+        <div class="actions">
+          <button onclick={() => confirmPaste(false)}>{t('cancel')}</button>
+          <button class="primary" onclick={() => confirmPaste(true)}>{t('paste')}</button>
+        </div>
+      </div>
+    </div>
+  {/if}
 
   {#if hostKeyPrompt}
     <div class="backdrop">
@@ -243,6 +304,13 @@
   .mono {
     font-family: Consolas, monospace;
     word-break: break-all;
+  }
+  .preview {
+    max-height: 160px;
+    overflow: auto;
+    background: #1e1e1e;
+    padding: 8px;
+    font-size: 12px;
   }
   .actions {
     display: flex;

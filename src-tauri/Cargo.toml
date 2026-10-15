@@ -20,6 +20,7 @@ serde_json.workspace = true
 pxt-core = { path = "../crates/pxt-core" }
 pxt-ssh = { path = "../crates/pxt-ssh" }
 tokio = { workspace = true, features = ["sync"] }
+tauri-plugin-clipboard-manager = "2.5.0"
 
 [features]
 # Incorpora il frontend nell'exe (la CLI di Tauri lo attiva da sola; con cargo build va esplicito)
