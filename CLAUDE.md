@@ -46,5 +46,7 @@ Documenti di riferimento (leggerli prima di iniziare una milestone):
 
 ## Stato attuale
 
-- Milestone corrente: **M0 (spike tecnico e scheletro)**. Nessun codice ancora scritto.
-- Primo passo: decidere D-10 (Svelte vs React) e creare il workspace Cargo + app Tauri.
+- M0 (spike) concluso con esito **go**: vedi `docs/spike-m0.md`. Decisioni D-10..D-13 registrate.
+- Milestone corrente: **M1 (SSH a schede e sessioni locali)**. Esiste già: connessione SSH con password, terminale xterm.js, known_hosts con dialogo host key, tracciamento cwd (OSC 7) per bash/tcsh, copia/incolla.
+- Gotcha: con `cargo build` diretto serve la feature `custom-protocol` (attiva di default); il backend crittografico di russh è `ring` (D-11); nei comandi shell con heredoc i backslash possono essere alterati, preferire il tool Write per file con escape.
+- Prossimo passo: modello dati e provider di sessioni/segreti in `pxt-core`.

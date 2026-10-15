@@ -522,6 +522,9 @@ Opzione `sshTunnelVia`: il backend apre un canale `direct-tcpip` su una connessi
 | D-08 | 2026-10-15 | RDP: client esterno in v1, IronRDP in v2 | Non bloccare l'MVP sulla parte più difficile |
 | D-09 | 2026-10-15 | FTPS default; FTP in chiaro con avviso e disattivabile da policy | Sicurezza |
 | D-10 | 2026-10-15 | Framework frontend: **Svelte 5 + TypeScript + Vite** (Vite semplice, senza SvelteKit); package manager npm | Leggerezza, poco boilerplate; SvelteKit non serve in una SPA Tauri |
+| D-11 | 2026-10-15 | Backend crittografico di russh: **`ring`** al posto di `aws-lc-rs` | `aws-lc-rs` richiede NASM per compilare su Windows; `ring` non ha dipendenze esterne |
+| D-12 | 2026-10-15 | Appunti tramite il plugin ufficiale **tauri-plugin-clipboard-manager**, con i soli permessi `read-text` e `write-text` | `navigator.clipboard` in WebView2 può chiedere permessi a ogni incolla |
+| D-13 | 2026-10-15 | Esito spike M0: **go** sullo stack. Rischio aperto su NFR-03 (memoria, ~273 MB a riposo per via di WebView2) | Vedi `docs/spike-m0.md` |
 
 ---
 

@@ -17,4 +17,4 @@ Cosa **non** fa, per scelta: nessun server integrato, nessuna porta in ascolto, 
 
 ## Stato
 
-In progettazione. Milestone corrente: M0 (spike tecnico).
+M0 (spike tecnico) concluso. Milestone corrente: M1 (SSH a schede e sessioni locali).
