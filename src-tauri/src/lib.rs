@@ -4,9 +4,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use pxt_core::{
-    subtree_ids, AuthMethod, CredentialRef, KeyringSecretProvider, LocalSessionProvider,
-    LocalSettings, Protocol, Secret, SecretProvider, Session, SessionNode, SessionProvider,
-    Settings,
+    subtree_ids, transfer, AuditEvent, AuditLog, AuthMethod, CredentialRef, KeyringSecretProvider,
+    LocalSessionProvider, LocalSettings, Outcome, Protocol, Secret, SecretProvider, Session,
+    SessionNode, SessionProvider, Settings,
 };
 use pxt_ssh::{
     ConnectParams, Credentials, Hop, HostKeyInfo, HostKeyVerifier, KnownHosts, Shell, ShellEvent,
@@ -26,7 +26,9 @@ const PASSPHRASE_REQUIRED: &str = "passphrase-required";
 struct AppState {
     sessions: LocalSessionProvider,
     settings: LocalSettings,
+    audit: AuditLog,
     secrets: KeyringSecretProvider,
+    data_dir: PathBuf,
     known_hosts: PathBuf,
     shells: Mutex<HashMap<u64, Shell>>,
     pending_hostkeys: Mutex<HashMap<u64, oneshot::Sender<bool>>>,
@@ -38,8 +40,10 @@ impl AppState {
         Self {
             sessions: LocalSessionProvider::new(data_dir.join("sessions.json")),
             settings: LocalSettings::new(data_dir.join("settings.json")),
+            audit: AuditLog::new(data_dir.join("logs")),
             secrets: KeyringSecretProvider::new(pxt_core::APP_NAME),
             known_hosts: data_dir.join("known_hosts"),
+            data_dir,
             shells: Mutex::default(),
             pending_hostkeys: Mutex::default(),
             next_id: AtomicU64::new(0),
@@ -48,6 +52,40 @@ impl AppState {
 
     fn next_id(&self) -> u64 {
         self.next_id.fetch_add(1, Ordering::Relaxed) + 1
+    }
+
+    /// Registra un evento di audit. Un errore di scrittura del log non deve bloccare l'uso dell'app.
+    fn audit(&self, ctx: &AuditCtx, event: &str, outcome: Outcome, detail: Option<String>) {
+        let _ = self.audit.record(&AuditEvent {
+            event: event.into(),
+            protocol: "ssh".into(),
+            host: ctx.host.clone(),
+            port: ctx.port,
+            user: ctx.user.clone(),
+            outcome,
+            via: ctx.via.clone(),
+            detail,
+        });
+    }
+}
+
+/// Destinazione di una connessione, per il log di audit.
+#[derive(Clone)]
+struct AuditCtx {
+    host: String,
+    port: u16,
+    user: String,
+    /// Jump host attraversati (`host:porta`).
+    via: Vec<String>,
+}
+
+fn is_hostkey_changed(e: &SshError) -> bool {
+    match e {
+        SshError::HostKeyChanged { .. } => true,
+        SshError::Jump { source, .. } | SshError::Target { source, .. } => {
+            is_hostkey_changed(source)
+        }
+        _ => false,
     }
 }
 
@@ -111,6 +149,22 @@ fn app_info() -> String {
     format!("{} {}", pxt_core::APP_NAME, env!("CARGO_PKG_VERSION"))
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AppPaths {
+    data_dir: String,
+    audit_log: String,
+}
+
+/// Dove l'app tiene i suoi dati (utile per trasparenza verso l'utente e l'IT).
+#[tauri::command]
+fn app_paths(state: Shared<'_>) -> AppPaths {
+    AppPaths {
+        data_dir: state.data_dir.display().to_string(),
+        audit_log: state.audit.path().display().to_string(),
+    }
+}
+
 #[tauri::command]
 fn settings_get(state: Shared<'_>) -> Result<Settings, String> {
     state.settings.load().map_err(err)
@@ -157,6 +211,35 @@ async fn session_save(
 }
 
 /// Elimina il nodo (e il suo contenuto) insieme alle password salvate.
+/// Esporta le sessioni (senza segreti) nel file scelto dall'utente.
+#[tauri::command]
+async fn sessions_export(state: Shared<'_>, path: String) -> Result<usize, String> {
+    let nodes = state.sessions.list().await.map_err(err)?;
+    let json = transfer::export_json(&nodes).map_err(err)?;
+    std::fs::write(&path, json).map_err(err)?;
+    Ok(nodes.len())
+}
+
+/// Dimensione massima di un file di sessioni importabile.
+const MAX_IMPORT_BYTES: u64 = 20 * 1024 * 1024;
+
+/// Importa un file di sessioni dentro una nuova cartella; non sovrascrive nulla di esistente.
+#[tauri::command]
+async fn sessions_import(
+    state: Shared<'_>,
+    path: String,
+    folder_name: String,
+) -> Result<usize, String> {
+    if std::fs::metadata(&path).map_err(err)?.len() > MAX_IMPORT_BYTES {
+        return Err("file troppo grande per essere un elenco di sessioni".into());
+    }
+    let text = std::fs::read_to_string(&path).map_err(err)?;
+    let nodes = transfer::import_json(&text, &folder_name).map_err(err)?;
+    let count = nodes.len() - 1; // la cartella di import non conta
+    state.sessions.save_many(nodes).await.map_err(err)?;
+    Ok(count)
+}
+
 #[tauri::command]
 async fn session_delete(state: Shared<'_>, id: Uuid) -> Result<(), String> {
     let nodes = state.sessions.list().await.map_err(err)?;
@@ -318,6 +401,15 @@ async fn ssh_connect(
         CredError::NeedSecret => PASSWORD_REQUIRED.to_string(),
         CredError::Other(m) => m,
     })?;
+    let ctx = AuditCtx {
+        host: dest.host.clone(),
+        port: dest.port,
+        user: dest.username.clone(),
+        via: hops
+            .iter()
+            .map(|h| format!("{}:{}", h.host, h.port))
+            .collect(),
+    };
     hops.push(Hop {
         host: dest.host,
         port: dest.port,
@@ -328,11 +420,18 @@ async fn ssh_connect(
     let verifier: HostKeyVerifier = {
         let state = Arc::clone(&state);
         let on_event = on_event.clone();
+        let ctx = ctx.clone();
         Arc::new(move |info: HostKeyInfo| {
             let state = Arc::clone(&state);
             let on_event = on_event.clone();
+            let ctx = ctx.clone();
             Box::pin(async move {
                 let req_id = state.next_id();
+                // Dati pubblici della chiave del server: si possono registrare.
+                let key_detail = format!(
+                    "{}:{} {} {}",
+                    info.host, info.port, info.key_type, info.fingerprint
+                );
                 let (tx, rx) = oneshot::channel();
                 state.pending_hostkeys.lock().unwrap().insert(req_id, tx);
                 let sent = on_event.send(TermEvent::HostKey {
@@ -346,12 +445,26 @@ async fn ssh_connect(
                     state.pending_hostkeys.lock().unwrap().remove(&req_id);
                     return false;
                 }
-                rx.await.unwrap_or(false)
+                let accepted = rx.await.unwrap_or(false);
+                let event = if accepted {
+                    "hostkey_accepted"
+                } else {
+                    "hostkey_rejected"
+                };
+                let outcome = if accepted {
+                    Outcome::Ok
+                } else {
+                    Outcome::Failed
+                };
+                state.audit(&ctx, event, outcome, Some(key_detail));
+                accepted
             })
         })
     };
 
     let (ev_tx, mut ev_rx) = mpsc::channel::<ShellEvent>(64);
+    let pump_state = Arc::clone(&state);
+    let pump_ctx = ctx.clone();
     tauri::async_runtime::spawn(async move {
         while let Some(ev) = ev_rx.recv().await {
             match ev {
@@ -364,6 +477,7 @@ async fn ssh_connect(
                     let _ = on_event.send(TermEvent::Cwd { path });
                 }
                 ShellEvent::Closed(exit) => {
+                    pump_state.audit(&pump_ctx, "disconnect", Outcome::Ok, None);
                     let _ = on_event.send(TermEvent::Closed { exit });
                     break;
                 }
@@ -382,11 +496,30 @@ async fn ssh_connect(
         verifier,
         ev_tx,
     )
-    .await
-    .map_err(|e| match e {
-        SshError::PassphraseRequired => PASSPHRASE_REQUIRED.to_string(),
-        other => other.to_string(),
-    })?;
+    .await;
+    let shell = match shell {
+        Ok(s) => {
+            state.audit(&ctx, "connect", Outcome::Ok, None);
+            s
+        }
+        Err(e) => {
+            // La richiesta di passphrase non è un fallimento: l'utente la fornirà.
+            if is_hostkey_changed(&e) {
+                state.audit(
+                    &ctx,
+                    "hostkey_changed",
+                    Outcome::Failed,
+                    Some(e.to_string()),
+                );
+            } else if !matches!(e, SshError::PassphraseRequired) {
+                state.audit(&ctx, "connect", Outcome::Failed, Some(e.to_string()));
+            }
+            return Err(match e {
+                SshError::PassphraseRequired => PASSPHRASE_REQUIRED.to_string(),
+                other => other.to_string(),
+            });
+        }
+    };
 
     let id = state.next_id();
     state.shells.lock().unwrap().insert(id, shell);
@@ -448,11 +581,14 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             app_info,
+            app_paths,
             settings_get,
             settings_set,
             sessions_list,
             session_save,
             session_delete,
+            sessions_export,
+            sessions_import,
             ssh_connect,
             ssh_write,
             ssh_resize,

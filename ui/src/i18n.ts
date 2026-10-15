@@ -88,6 +88,14 @@ const it: Dict = {
   inherit: 'Come le impostazioni',
   customBackground: 'Sfondo personalizzato',
   tabColor: 'Colore della scheda',
+  sessionsData: 'Sessioni e dati',
+  exportSessions: 'Esporta sessioni…',
+  importSessions: 'Importa sessioni…',
+  exportHint: 'Il file non contiene password né passphrase: vanno reinserite dopo l’importazione.',
+  exported: 'Esportati {n} elementi.',
+  imported: 'Importati {n} elementi in una nuova cartella.',
+  importedFolder: 'Importate',
+  auditPath: 'Registro di audit',
   loadError: 'Impossibile leggere le sessioni',
 }
 
@@ -179,6 +187,14 @@ const en: Dict = {
   inherit: 'Same as settings',
   customBackground: 'Custom background',
   tabColor: 'Tab color',
+  sessionsData: 'Sessions and data',
+  exportSessions: 'Export sessions…',
+  importSessions: 'Import sessions…',
+  exportHint: 'The file contains no passwords or passphrases: enter them again after importing.',
+  exported: 'Exported {n} items.',
+  imported: 'Imported {n} items into a new folder.',
+  importedFolder: 'Imported',
+  auditPath: 'Audit log',
   loadError: 'Unable to read the sessions',
 }
 

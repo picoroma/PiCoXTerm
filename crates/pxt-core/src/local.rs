@@ -79,7 +79,7 @@ fn rotate_backups(path: &Path) -> Result<()> {
 }
 
 /// Porta un file di qualunque versione nota allo schema corrente.
-fn migrate(value: serde_json::Value) -> Result<SessionsFile> {
+pub(crate) fn migrate(value: serde_json::Value) -> Result<SessionsFile> {
     let found = value
         .get("schemaVersion")
         .and_then(|v| v.as_u64())
@@ -114,6 +114,19 @@ impl SessionProvider for LocalSessionProvider {
         match file.nodes.iter_mut().find(|n| n.id() == node.id()) {
             Some(existing) => *existing = node,
             None => file.nodes.push(node),
+        }
+        self.store(&file)
+    }
+
+    /// Una sola scrittura per tutti i nodi: l'import non consuma i backup rotativi.
+    async fn save_many(&self, nodes: Vec<SessionNode>) -> Result<()> {
+        let _g = self.lock.lock().unwrap();
+        let mut file = self.load()?;
+        for node in nodes {
+            match file.nodes.iter_mut().find(|n| n.id() == node.id()) {
+                Some(existing) => *existing = node,
+                None => file.nodes.push(node),
+            }
         }
         self.store(&file)
     }

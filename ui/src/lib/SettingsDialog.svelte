@@ -1,15 +1,52 @@
 <script lang="ts">
-  import { untrack } from 'svelte'
+  import { onMount, untrack } from 'svelte'
+  import { invoke } from '@tauri-apps/api/core'
+  import { open, save } from '@tauri-apps/plugin-dialog'
   import Modal from './Modal.svelte'
   import { saveSettings, settings, type Settings } from './settings.svelte'
   import { THEME_NAMES, type ThemeName } from './themes'
   import { t } from '../i18n'
 
-  let { onclose }: { onclose: () => void } = $props()
+  let { onclose, onimported }: { onclose: () => void; onimported: () => void } = $props()
 
   // Copia di lavoro: si applica solo con "Salva".
   let draft = $state<Settings>(untrack(() => $state.snapshot(settings)))
   let error = $state('')
+  let info = $state('')
+  let paths = $state<{ dataDir: string; auditLog: string } | null>(null)
+  const jsonFilter = [{ name: 'JSON', extensions: ['json'] }]
+
+  onMount(() => {
+    invoke<{ dataDir: string; auditLog: string }>('app_paths')
+      .then((p) => (paths = p))
+      .catch(() => {})
+  })
+
+  async function exportSessions() {
+    error = info = ''
+    try {
+      const path = await save({ defaultPath: 'picoxterm-sessions.json', filters: jsonFilter })
+      if (!path) return
+      const n = await invoke<number>('sessions_export', { path })
+      info = t('exported', { n })
+    } catch (e) {
+      error = String(e)
+    }
+  }
+
+  async function importSessions() {
+    error = info = ''
+    try {
+      const path = await open({ multiple: false, directory: false, filters: jsonFilter })
+      if (typeof path !== 'string') return
+      const day = new Date().toISOString().slice(0, 10)
+      const n = await invoke<number>('sessions_import', { path, folderName: `${t('importedFolder')} ${day}` })
+      info = t('imported', { n })
+      onimported()
+    } catch (e) {
+      error = String(e)
+    }
+  }
 
   async function submit(e: Event) {
     e.preventDefault()
@@ -40,6 +77,18 @@
     <label class="check"><input type="checkbox" bind:checked={draft.copyOnSelect} /> {t('copyOnSelect')}</label>
     <label class="check"><input type="checkbox" bind:checked={draft.rightClickPaste} /> {t('rightClickPaste')}</label>
     <label class="check"><input type="checkbox" bind:checked={draft.pasteMultilineWarning} /> {t('pasteWarning')}</label>
+    <fieldset>
+      <legend>{t('sessionsData')}</legend>
+      <div class="row">
+        <button type="button" onclick={exportSessions}>{t('exportSessions')}</button>
+        <button type="button" onclick={importSessions}>{t('importSessions')}</button>
+      </div>
+      <p class="hint">{t('exportHint')}</p>
+      {#if paths}
+        <p class="hint">{t('auditPath')}: <code>{paths.auditLog}</code></p>
+      {/if}
+    </fieldset>
+    {#if info}<p class="ok">{info}</p>{/if}
     {#if error}<p class="err">{error}</p>{/if}
   </form>
   {#snippet actions()}
@@ -73,6 +122,25 @@
   }
   .grow {
     flex: 1;
+  }
+  fieldset {
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin: 0;
+    color: var(--fg-dim);
+    font-size: 13px;
+  }
+  .hint {
+    margin: 0;
+    font-size: 12px;
+    word-break: break-all;
+  }
+  .ok {
+    color: #5cb85c;
+    margin: 0;
   }
   .err {
     color: var(--danger);

@@ -1,13 +1,16 @@
 //! Modello dati, provider di sessioni e segreti, policy, errori.
 //! Questo crate non dipende da Tauri.
 
+pub mod audit;
 pub mod error;
 pub mod local;
 pub mod model;
 pub mod provider;
 pub mod secrets;
 pub mod settings;
+pub mod transfer;
 
+pub use audit::{AuditEvent, AuditLog, Outcome};
 pub use error::{CoreError, Result};
 pub use local::LocalSessionProvider;
 pub use model::*;

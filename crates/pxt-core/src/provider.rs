@@ -15,6 +15,15 @@ pub trait SessionProvider: Send + Sync {
     fn list(&self) -> impl Future<Output = Result<Vec<SessionNode>>> + Send;
     /// Inserisce o aggiorna (per id) un nodo.
     fn save(&self, node: SessionNode) -> impl Future<Output = Result<()>> + Send;
+    /// Inserisce o aggiorna più nodi. Le implementazioni possono ottimizzarlo in una sola scrittura.
+    fn save_many(&self, nodes: Vec<SessionNode>) -> impl Future<Output = Result<()>> + Send {
+        async move {
+            for node in nodes {
+                self.save(node).await?;
+            }
+            Ok(())
+        }
+    }
     /// Elimina il nodo; per una cartella elimina anche tutto il contenuto.
     fn delete(&self, id: Uuid) -> impl Future<Output = Result<()>> + Send;
 }

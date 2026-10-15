@@ -28,6 +28,10 @@ let settings: any = {
 }
 const handlers: Record<string, (args: any) => unknown> = {
   settings_get: () => settings,
+  app_paths: () => ({ dataDir: 'C:\\Users\\mock\\PiCoXterm', auditLog: 'C:\\Users\\mock\\PiCoXterm\\logs\\audit.log' }),
+  sessions_export: () => nodes.length,
+  sessions_import: () => 3,
+  'plugin:dialog|save': () => 'C:\\tmp\\export.json',
   settings_set: (args) => (settings = args.settings),
   sessions_list: () => JSON.parse(JSON.stringify(nodes)),
   session_save: ({ node }) => {

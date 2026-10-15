@@ -195,7 +195,7 @@
 </main>
 
 {#if showSettings}
-  <SettingsDialog onclose={() => (showSettings = false)} />
+  <SettingsDialog onclose={() => (showSettings = false)} onimported={reload} />
 {/if}
 
 {#if editing}
