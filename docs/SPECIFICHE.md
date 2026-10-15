@@ -376,7 +376,7 @@ Richiesta dell'utente (15 ottobre 2026, D-17): ping e verifica dell'apertura del
 | **Ping** | ICMP (su Windows con l'API di sistema, senza amministratore) con ripiego su prova di connessione TCP | Nessuna | Esito con tempi minimo, medio e massimo |
 | **Verifica di una porta o di un intervallo** | Tentativo di connessione TCP in uscita dal PC verso host e porta (o intervallo, per esempio 3200-3299) | Nessuna | Raggiungibile anche **dal punto di vista di un server**: la prova parte dal jump host o dal server tramite `direct-tcpip`, utile per verificare i firewall tra due server |
 | **Porte in ascolto su un server** | Esegue `ss -tlnp` (ripiego `netstat`) sul server tramite una sessione SSH già aperta e mostra una tabella (porta, indirizzo, processo) | Nessuna | È una *lettura* della configurazione del server, non una scansione |
-| Scansione di tutte le 65.535 porte di un host | Possibile, ma è il caso percepito come strumento offensivo | Nessuna | Da decidere (vedi domanda aperta 7): solo su host che hanno una sessione salvata, con limite di velocità, avviso e registrazione nell'audit |
+| Scansione di tutte le 65.535 porte di un host | Non prevista: per "tutte le porte in ascolto" si usa la lista sul server (riga precedente), scelta dell'utente il 15 ottobre 2026 | Nessuna | Resta esclusa (2.2); si può riaprire con una nuova decisione |
 
 Regole comuni: tutto in uscita (SEC-01), interruttore `allowNetworkTools` in `policy.json` (default consentito solo per ping e porta singola), ogni uso registrato nel log di audit (5.2), limiti di velocità e di numero di porte per richiesta.
 
@@ -583,4 +583,4 @@ Opzione `sshTunnelVia`: il backend apre un canale `direct-tcpip` su una connessi
 4. Il port forwarding locale (6.6) serve davvero per SAP GUI/HANA Studio, o si usa già un'altra via (VPN, Devolutions Gateway)?
 5. FTP in modalità attiva: si può escludere del tutto?
 6. X11 (6.7): per quali applicazioni serve davvero (SAPinst, `hdbsetup`, installer Oracle, altro) e quale X server esterno si usa già (VcXsrv, X410, altro)?
-7. Strumenti di rete (D-17, 6.8): "tutte le porte in ascolto su un dato server" significa la **lista delle porte in ascolto sul server** (letta via SSH, senza scansione) oppure la **scansione di tutte le porte** dall'esterno? La prima è sicura e prevista; la seconda richiede cautele.
+7. ~~Strumenti di rete (D-17, 6.8): lista sul server o scansione?~~ Risolta il 15 ottobre 2026: la **lista delle porte in ascolto sul server** (via SSH); la scansione completa non è prevista.
