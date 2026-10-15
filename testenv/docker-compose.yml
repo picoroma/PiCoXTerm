@@ -1,0 +1,14 @@
+# Ambiente di test SOLO per sviluppo: credenziali fittizie, porta esposta solo su loopback.
+services:
+  ssh:
+    image: lscr.io/linuxserver/openssh-server:latest
+    container_name: pxt-test-ssh
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - PASSWORD_ACCESS=true
+      - USER_NAME=test
+      - USER_PASSWORD=test
+      - SUDO_ACCESS=false
+    ports:
+      - "127.0.0.1:2222:2222"
