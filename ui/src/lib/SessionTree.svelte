@@ -1,5 +1,6 @@
 <script lang="ts">
   import { t } from '../i18n'
+  import Icon from './Icon.svelte'
   import { subtreeIds, type Folder, type Session, type SessionNode, type Uuid } from './types'
 
   let {
@@ -289,7 +290,9 @@
     flex: 1;
   }
   .head button {
-    padding: 2px 8px;
+    display: inline-flex;
+    align-items: center;
+    padding: 4px 7px;
   }
   .filter {
     margin: 0 8px 8px;

@@ -4,6 +4,7 @@
   import { getCurrentWebview } from '@tauri-apps/api/webview'
   import { open as openDialog } from '@tauri-apps/plugin-dialog'
   import ConflictDialog from './ConflictDialog.svelte'
+  import Icon from './Icon.svelte'
   import { discardPlan, startTransfer, type ConflictPolicy, type PlanSummary } from './transfers.svelte'
   import { t } from '../i18n'
   import type { SftpEntry, TrackingInfo } from './types'
@@ -411,27 +412,32 @@
 
 <section class="sftp" class:dropping={dropActive} bind:this={panelEl} aria-label={t('sftp')}>
   <div class="head">
-    <strong>{t('sftp')}</strong>
+    <span class="group" role="group" aria-label={t('navigation')}>
+      <button type="button" title={t('back')} aria-label={t('back')} disabled={!cur || cur.index <= 0} onclick={() => goHistory(-1)}><Icon name="arrow-left" /></button>
+      <button type="button" title={t('forward')} aria-label={t('forward')} disabled={!cur || cur.index >= cur.history.length - 1} onclick={() => goHistory(1)}><Icon name="arrow-right" /></button>
+      <button type="button" title={t('parentFolder')} aria-label={t('parentFolder')} disabled={!cur || cur.path === '/'} onclick={goUp}><Icon name="parent" /></button>
+      <button type="button" title={t('refresh')} aria-label={t('refresh')} disabled={!cur || connId === null} onclick={() => connId !== null && cur && go(connId, cur.path, false)}><Icon name="refresh" /></button>
+    </span>
+    <span class="group" role="group" aria-label={t('transfers')}>
+      <button type="button" title={t('uploadFiles')} aria-label={t('uploadFiles')} disabled={!cur} onclick={() => pickUpload(false)}><Icon name="upload" /></button>
+      <button type="button" title={t('uploadFolder')} aria-label={t('uploadFolder')} disabled={!cur} onclick={() => pickUpload(true)}><Icon name="folder-up" /></button>
+      <button type="button" title={t('downloadSelection')} aria-label={t('downloadSelection')} disabled={!cur || selection.size === 0} onclick={downloadSelection}><Icon name="download" /></button>
+    </span>
     <span class="spacer"></span>
-    <button type="button" title={t('back')} aria-label={t('back')} disabled={!cur || cur.index <= 0} onclick={() => goHistory(-1)}>←</button>
-    <button type="button" title={t('forward')} aria-label={t('forward')} disabled={!cur || cur.index >= cur.history.length - 1} onclick={() => goHistory(1)}>→</button>
-    <button type="button" title={t('parentFolder')} aria-label={t('parentFolder')} disabled={!cur || cur.path === '/'} onclick={goUp}>↑</button>
-    <button type="button" title={t('refresh')} aria-label={t('refresh')} disabled={!cur || connId === null} onclick={() => connId !== null && cur && go(connId, cur.path, false)}>↻</button>
-    <button
-      type="button"
-      class:on={follow}
-      aria-pressed={follow}
-      title={follow ? t('followOn') : t('followOff')}
-      aria-label={t('followTerminal')}
-      onclick={() => (follow = !follow)}>{follow ? '🔒' : '🔓'}</button
-    >
-    <button type="button" title={t('uploadFiles')} aria-label={t('uploadFiles')} disabled={!cur} onclick={() => pickUpload(false)}>⬆</button>
-    <button type="button" title={t('uploadFolder')} aria-label={t('uploadFolder')} disabled={!cur} onclick={() => pickUpload(true)}>📁⬆</button>
-    <button type="button" title={t('downloadSelection')} aria-label={t('downloadSelection')} disabled={!cur || selection.size === 0} onclick={downloadSelection}>⬇</button>
-    {#if onwiden}
-      <button type="button" class:on={wide} aria-pressed={wide} title={wide ? t('narrow') : t('widen')} aria-label={wide ? t('narrow') : t('widen')} onclick={onwiden}>⇔</button>
-    {/if}
-    <button type="button" class:on={showHidden} aria-pressed={showHidden} title={t('showHidden')} aria-label={t('showHidden')} onclick={() => (showHidden = !showHidden)}>.*</button>
+    <span class="group" role="group" aria-label={t('viewOptions')}>
+      <button
+        type="button"
+        class:on={follow}
+        aria-pressed={follow}
+        title={follow ? t('followOn') : t('followOff')}
+        aria-label={t('followTerminal')}
+        onclick={() => (follow = !follow)}><Icon name={follow ? 'lock' : 'unlock'} /></button
+      >
+      <button type="button" class:on={showHidden} aria-pressed={showHidden} title={t('showHidden')} aria-label={t('showHidden')} onclick={() => (showHidden = !showHidden)}><Icon name={showHidden ? 'eye' : 'eye-off'} /></button>
+      {#if onwiden}
+        <button type="button" class:on={wide} aria-pressed={wide} title={wide ? t('narrow') : t('widen')} aria-label={wide ? t('narrow') : t('widen')} onclick={onwiden}><Icon name="arrows-h" /></button>
+      {/if}
+    </span>
   </div>
 
   {#if connId === null || !cur}
@@ -531,15 +537,27 @@
   .head {
     display: flex;
     align-items: center;
-    gap: 4px;
-    padding: 6px 8px;
+    flex-wrap: wrap;
+    gap: 4px 6px;
+    padding: 6px 6px 4px;
+  }
+  .group {
+    display: inline-flex;
+    flex: none;
+    gap: 1px;
+  }
+  .head :global(svg) {
+    width: 15px;
+    height: 15px;
   }
   .spacer {
     flex: 1;
   }
   .head button {
-    padding: 2px 7px;
-    min-width: 26px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 3px 4px;
   }
   .head button.on {
     background: color-mix(in srgb, var(--accent) 30%, transparent);

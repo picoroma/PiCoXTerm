@@ -180,6 +180,11 @@ const it: Dict = {
   cancelled: 'Annullato',
   failed: 'Non riuscito',
   andMore: 'altri {n}',
+  btnUpload: 'Carica',
+  btnUploadFolder: 'Cartella',
+  btnDownload: 'Scarica',
+  navigation: 'Navigazione',
+  viewOptions: 'Opzioni di visualizzazione',
   loadError: 'Impossibile leggere le sessioni',
 }
 
@@ -363,6 +368,11 @@ const en: Dict = {
   cancelled: 'Cancelled',
   failed: 'Failed',
   andMore: '{n} more',
+  btnUpload: 'Upload',
+  btnUploadFolder: 'Folder',
+  btnDownload: 'Download',
+  navigation: 'Navigation',
+  viewOptions: 'View options',
   loadError: 'Unable to read the sessions',
 }
 

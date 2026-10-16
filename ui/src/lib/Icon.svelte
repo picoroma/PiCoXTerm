@@ -1,0 +1,73 @@
+<script lang="ts">
+  export type IconName =
+    | 'arrow-left'
+    | 'arrow-right'
+    | 'parent'
+    | 'refresh'
+    | 'lock'
+    | 'unlock'
+    | 'eye'
+    | 'eye-off'
+    | 'arrows-h'
+    | 'upload'
+    | 'download'
+    | 'folder-up'
+    | 'folder-plus'
+    | 'plus'
+
+  let { name, size = 16 }: { name: IconName; size?: number } = $props()
+
+  const FOLDER =
+    'M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z'
+  const TRAY = 'M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4'
+  const PADLOCK = 'M5 11h14a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2z'
+  const EYE = 'M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z'
+
+  // Icone a tratto singolo (stile coerente: 24x24, tratto 2, estremità arrotondate).
+  const paths: Record<IconName, string[]> = {
+    'arrow-left': ['M19 12H5', 'M12 19l-7-7 7-7'],
+    'arrow-right': ['M5 12h14', 'M12 5l7 7-7 7'],
+    // Cartella superiore: freccia ad angolo, ben diversa dalla freccia di caricamento.
+    parent: ['M14 9L9 4 4 9', 'M20 20h-7a4 4 0 0 1-4-4V4'],
+    refresh: [
+      'M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8',
+      'M21 3v5h-5',
+      'M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16',
+      'M8 16H3v5',
+    ],
+    lock: ['M7 11V7a5 5 0 0 1 10 0v4', PADLOCK],
+    unlock: ['M7 11V7a5 5 0 0 1 9.9-1', PADLOCK],
+    eye: [EYE, 'M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z'],
+    'eye-off': [EYE, 'M3 3l18 18'],
+    'arrows-h': ['M8 7l-5 5 5 5', 'M16 7l5 5-5 5', 'M3 12h18'],
+    upload: [TRAY, 'M17 8l-5-5-5 5', 'M12 3v12'],
+    download: [TRAY, 'M7 10l5 5 5-5', 'M12 15V3'],
+    'folder-up': [FOLDER, 'M12 17v-6', 'M9 14l3-3 3 3'],
+    'folder-plus': [FOLDER, 'M12 11v6', 'M9 14h6'],
+    plus: ['M12 5v14', 'M5 12h14'],
+  }
+</script>
+
+<svg
+  width={size}
+  height={size}
+  viewBox="0 0 24 24"
+  fill="none"
+  stroke="currentColor"
+  stroke-width="2"
+  stroke-linecap="round"
+  stroke-linejoin="round"
+  aria-hidden="true"
+  focusable="false"
+>
+  {#each paths[name] as d (d)}
+    <path {d} />
+  {/each}
+</svg>
+
+<style>
+  svg {
+    display: block;
+    flex: none;
+  }
+</style>
