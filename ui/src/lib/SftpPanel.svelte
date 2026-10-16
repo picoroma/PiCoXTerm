@@ -11,6 +11,7 @@
   import PropertiesDialog from './PropertiesDialog.svelte'
   import { discardPlan, startTransfer, type ConflictPolicy, type PlanSummary } from './transfers.svelte'
   import { t } from '../i18n'
+  import { placeMenu } from './menu'
   import type { SftpEntry, TrackingInfo } from './types'
 
   let {
@@ -249,6 +250,13 @@
     let out = ''
     for (let i = 0; i < 9; i++) out += e.mode & (1 << (8 - i)) ? bits[i] : '-'
     return `${e.kind === 'dir' ? 'd' : e.isSymlink ? 'l' : '-'}${out}`
+  }
+
+  /** Descrizione al passaggio del mouse: nome, permessi e proprietario. */
+  function rowTooltip(e: SftpEntry): string {
+    const perms = modeString(e)
+    const who = e.owner ? `${e.owner}${e.group ? ':' + e.group : ''}` : ''
+    return [e.name, perms && who ? `${perms}  ${who}` : perms || who].filter(Boolean).join('\n')
   }
 
   const icon = (e: SftpEntry) => (e.kind === 'dir' ? '📁' : e.isSymlink ? '🔗' : '📄')
@@ -592,7 +600,7 @@
           role="option"
           aria-selected={selection.has(e.path)}
           tabindex="0"
-          title="{e.name}{modeString(e) ? `\n${modeString(e)}` : ''}{e.owner ? `  ${e.owner}${e.group ? ':' + e.group : ''}` : ''}"
+          title={menu ? undefined : rowTooltip(e)}
           onclick={(ev) => selectRow(e, ev)}
           oncontextmenu={(ev) => rowMenu(ev, e)}
           ondblclick={() => open(e)}
@@ -620,7 +628,7 @@
 {/if}
 
 {#if menu}
-  <div class="menu" role="menu" style:left="{menu.x}px" style:top="{menu.y}px">
+  <div class="menu" role="menu" use:placeMenu={{ x: menu.x, y: menu.y }}>
     {#if hasFiles}
       <button role="menuitem" onclick={() => pick(() => downloadSelection('file'))}>{t('downloadFiles')}</button>
     {/if}

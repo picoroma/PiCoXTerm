@@ -1,5 +1,6 @@
 <script lang="ts">
   import { t } from '../i18n'
+  import { placeMenu } from './menu'
   import Icon from './Icon.svelte'
   import { subtreeIds, type Folder, type Session, type SessionNode, type Uuid } from './types'
 
@@ -252,7 +253,7 @@
 
 {#if menu}
   {@const target = menu.node}
-  <div class="menu" role="menu" style:left="{menu.x}px" style:top="{menu.y}px">
+  <div class="menu" role="menu" use:placeMenu={{ x: menu.x, y: menu.y }}>
     {#if target?.type === 'session'}
       <button role="menuitem" onclick={() => pick(() => onopen(target))}>{t('open')}</button>
       <button role="menuitem" onclick={() => pick(() => onedit(target))}>{t('edit')}</button>
