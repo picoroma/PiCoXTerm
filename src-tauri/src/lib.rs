@@ -8,6 +8,7 @@ use pxt_core::{
     KeyringSecretProvider, LocalSessionProvider, LocalSettings, Outcome, Protocol, Secret,
     SecretProvider, Session, SessionNode, SessionProvider, Settings,
 };
+use pxt_fs::edit as fs_edit;
 use pxt_fs::ops as fs_ops;
 use pxt_fs::transfer as fs_transfer;
 use pxt_fs::transfer::{ConflictPolicy, Progress};
@@ -1022,6 +1023,63 @@ async fn sftp_mkdir(
     Ok(target)
 }
 
+/// Apre un file di testo remoto per l'editor integrato (D-19): il contenuto resta in memoria.
+#[tauri::command]
+async fn sftp_read_text(
+    state: Shared<'_>,
+    id: u64,
+    path: String,
+) -> Result<fs_edit::TextFile, String> {
+    let fs = sftp_for(&state, id).await?;
+    let r = fs_edit::read_text(&*fs, &path, fs_edit::MAX_EDIT_BYTES).await;
+    audit_conn(
+        &state,
+        id,
+        "sftp_edit_open",
+        r.is_ok(),
+        "1 file".to_string(),
+    );
+    r.map_err(err)
+}
+
+/// Salva il testo dell'editor. Se `base` è presente e il file è cambiato sul server non scrive e
+/// risponde `conflict`; con `base` assente (sovrascrittura voluta) scrive comunque.
+#[tauri::command]
+async fn sftp_write_text(
+    state: Shared<'_>,
+    id: u64,
+    path: String,
+    content: String,
+    encoding: fs_edit::Encoding,
+    eol: fs_edit::Eol,
+    base: Option<fs_edit::Stamp>,
+) -> Result<fs_edit::SaveOutcome, String> {
+    let fs = sftp_for(&state, id).await?;
+    let r = fs_edit::write_text(
+        &*fs,
+        &path,
+        &content,
+        encoding,
+        eol,
+        base,
+        fs_edit::MAX_EDIT_BYTES,
+    )
+    .await;
+    let saved = matches!(r, Ok(fs_edit::SaveOutcome::Saved { .. }));
+    audit_conn(
+        &state,
+        id,
+        "sftp_edit_save",
+        saved,
+        if saved {
+            "1 file".to_string()
+        } else {
+            "0 file".to_string()
+        },
+    );
+    r.map_err(err)
+}
+
 /// Piano di trasferimento in attesa, legato alla connessione per cui è stato calcolato.
 struct StoredPlan {
     conn: u64,
@@ -1369,6 +1427,8 @@ pub fn run() {
             sftp_chmod,
             sftp_rename,
             sftp_mkdir,
+            sftp_read_text,
+            sftp_write_text,
             transfer_plan_upload,
             transfer_plan_download,
             transfer_plan_discard,

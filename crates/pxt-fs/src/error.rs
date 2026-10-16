@@ -6,6 +6,14 @@ pub enum FsError {
     PermissionDenied(String),
     #[error("errore SFTP: {0}")]
     Sftp(String),
+    #[error("file troppo grande per l'editor ({size} byte, limite {max})")]
+    TooLarge { size: u64, max: u64 },
+    #[error("il file non sembra di testo (contiene dati binari)")]
+    NotText,
+    #[error("non è un file regolare: {0}")]
+    NotRegularFile(String),
+    #[error("il carattere \"{0}\" non è rappresentabile nella codifica del file (ISO-8859-1)")]
+    Unencodable(char),
 }
 
 impl FsError {

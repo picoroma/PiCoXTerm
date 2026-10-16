@@ -2,6 +2,7 @@
 //! Questo crate non dipende da Tauri né da `pxt-ssh`: il backend SFTP lavora su un qualsiasi
 //! flusso `AsyncRead + AsyncWrite`, che chi lo usa ottiene dalla connessione SSH.
 
+pub mod edit;
 mod entry;
 mod error;
 pub mod ops;
