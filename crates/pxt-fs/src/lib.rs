@@ -5,6 +5,7 @@
 pub mod edit;
 mod entry;
 mod error;
+pub mod external;
 pub mod ops;
 mod sftp;
 pub mod transfer;

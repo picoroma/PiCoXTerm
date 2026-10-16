@@ -9,6 +9,7 @@ use pxt_core::{
     SecretProvider, Session, SessionNode, SessionProvider, Settings,
 };
 use pxt_fs::edit as fs_edit;
+use pxt_fs::external as fs_external;
 use pxt_fs::ops as fs_ops;
 use pxt_fs::transfer as fs_transfer;
 use pxt_fs::transfer::{ConflictPolicy, Progress};
@@ -44,6 +45,8 @@ struct AppState {
     jobs: Mutex<HashMap<u64, Arc<fs_transfer::Control>>>,
     /// Lavori che si possono riprendere (in pausa, o conclusi con errori su alcuni file).
     resumable: Mutex<HashMap<u64, JobRecord>>,
+    /// File remoti aperti con l'editor di sistema (copie temporanee seguite fino al salvataggio).
+    externals: Mutex<HashMap<u64, Arc<ExternalEdit>>>,
     /// Destinazione di ogni connessione, per l'audit dei trasferimenti.
     conn_ctx: Mutex<HashMap<u64, AuditCtx>>,
     pending_hostkeys: Mutex<HashMap<u64, oneshot::Sender<HostKeyDecision>>>,
@@ -64,6 +67,7 @@ impl AppState {
             plans: Mutex::default(),
             jobs: Mutex::default(),
             resumable: Mutex::default(),
+            externals: Mutex::default(),
             conn_ctx: Mutex::default(),
             pending_hostkeys: Mutex::default(),
             next_id: AtomicU64::new(0),
@@ -1083,6 +1087,310 @@ async fn sftp_write_text(
     r.map_err(err)
 }
 
+// ---- Modifica con l'editor di sistema (7.6) ----
+
+/// Un file remoto scaricato in una cartella temporanea e aperto con il programma del sistema.
+struct ExternalEdit {
+    conn: u64,
+    remote_path: String,
+    local_path: PathBuf,
+    /// Cartella temporanea che contiene solo questo file: si elimina alla chiusura.
+    dir: PathBuf,
+    /// Stato del file remoto all'ultimo download o caricamento, per le modifiche concorrenti.
+    base: Mutex<fs_edit::Stamp>,
+    stop: AtomicBool,
+    on_event: Channel<ExternalEvent>,
+}
+
+/// Avvisi verso la UI per un file aperto con l'editor di sistema.
+#[derive(Serialize, Clone)]
+#[serde(tag = "type", rename_all = "camelCase")]
+enum ExternalEvent {
+    /// Il file locale è stato salvato dal programma: la UI decide se ricaricarlo sul server.
+    #[serde(rename_all = "camelCase")]
+    Changed { edit_id: u64 },
+    /// La connessione è stata chiusa: il file temporaneo è già stato eliminato.
+    #[serde(rename_all = "camelCase")]
+    Closed { edit_id: u64 },
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ExternalOpened {
+    edit_id: u64,
+    name: String,
+    /// Il file era già aperto: si è solo riaperto il programma.
+    reused: bool,
+}
+
+/// Ogni quanto si controlla se il programma ha salvato il file.
+const EXTERNAL_POLL: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// Radice delle cartelle temporanee: una per processo, così due copie dell'app non si disturbano.
+fn external_root() -> PathBuf {
+    std::env::temp_dir()
+        .join("PiCoXterm-edit")
+        .join(std::process::id().to_string())
+}
+
+/// Elimina le cartelle temporanee lasciate da esecuzioni chiuse male (più vecchie di un giorno).
+fn external_cleanup_stale() {
+    let parent = std::env::temp_dir().join("PiCoXterm-edit");
+    let Ok(entries) = std::fs::read_dir(&parent) else {
+        return;
+    };
+    let day = std::time::Duration::from_secs(24 * 3600);
+    for e in entries.flatten() {
+        let old = e
+            .metadata()
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.elapsed().ok())
+            .is_some_and(|age| age > day);
+        if old {
+            let _ = std::fs::remove_dir_all(e.path());
+        }
+    }
+}
+
+/// Estensioni che il sistema potrebbe **eseguire** invece di aprire in un editor: script e
+/// programmi. Per questi si usa l'editor integrato.
+const RUNNABLE_EXTENSIONS: &[&str] = &[
+    "exe",
+    "com",
+    "bat",
+    "cmd",
+    "scr",
+    "pif",
+    "msi",
+    "msp",
+    "ps1",
+    "psm1",
+    "psd1",
+    "vbs",
+    "vbe",
+    "js",
+    "jse",
+    "wsf",
+    "wsh",
+    "hta",
+    "lnk",
+    "url",
+    "reg",
+    "jar",
+    "cpl",
+    "msc",
+    "gadget",
+    "application",
+    "appref-ms",
+    "scf",
+    "inf",
+    "sct",
+    "chm",
+    "sh",
+    "bash",
+    "zsh",
+    "ksh",
+    "csh",
+    "command",
+    "app",
+    "desktop",
+    "py",
+    "pyw",
+    "pl",
+    "rb",
+    "php",
+    "run",
+    "bin",
+];
+
+fn is_runnable(name: &str) -> bool {
+    name.rsplit_once('.')
+        .map(|(_, ext)| ext.to_ascii_lowercase())
+        .is_some_and(|ext| RUNNABLE_EXTENSIONS.contains(&ext.as_str()))
+}
+
+/// Apre un file locale con il programma associato dal sistema.
+fn open_with_system(path: &std::path::Path) -> Result<(), String> {
+    opener::open(path)
+        .map_err(|e| format!("impossibile aprire il file con il programma di sistema: {e}"))
+}
+
+/// Scarica un file remoto in una cartella temporanea e lo apre con il programma del sistema. Da
+/// quel momento si controlla se viene salvato e la UI riceve `Changed`.
+#[tauri::command]
+async fn external_edit_open(
+    state: Shared<'_>,
+    id: u64,
+    path: String,
+    on_event: Channel<ExternalEvent>,
+) -> Result<ExternalOpened, String> {
+    let name = path
+        .rsplit('/')
+        .find(|s| !s.is_empty())
+        .unwrap_or("file")
+        .to_string();
+    if is_runnable(&name) {
+        return Err(
+            "Questo tipo di file potrebbe essere eseguito dal sistema invece di aprirsi in un editor: usa l'editor integrato (Modifica)."
+                .into(),
+        );
+    }
+    // Già aperto: si riapre solo il programma.
+    let existing = state
+        .externals
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|(_, e)| e.conn == id && e.remote_path == path)
+        .map(|(k, e)| (*k, Arc::clone(e)));
+    if let Some((edit_id, e)) = existing {
+        open_with_system(&e.local_path)?;
+        return Ok(ExternalOpened {
+            edit_id,
+            name,
+            reused: true,
+        });
+    }
+
+    let fs = sftp_for(&state, id).await?;
+    let edit_id = state.next_id();
+    let dir = external_root().join(format!("{edit_id}-{}", Uuid::new_v4()));
+    std::fs::create_dir_all(&dir).map_err(err)?;
+    let fetched = match fs_external::fetch(&*fs, &path, &dir, fs_external::MAX_EXTERNAL_BYTES).await
+    {
+        Ok(f) => f,
+        Err(e) => {
+            let _ = std::fs::remove_dir_all(&dir);
+            audit_conn(&state, id, "sftp_external_open", false, "0 file".into());
+            return Err(err(e));
+        }
+    };
+    if let Err(e) = open_with_system(&fetched.local_path) {
+        let _ = std::fs::remove_dir_all(&dir);
+        return Err(e);
+    }
+    audit_conn(&state, id, "sftp_external_open", true, "1 file".into());
+
+    let edit = Arc::new(ExternalEdit {
+        conn: id,
+        remote_path: path,
+        local_path: fetched.local_path,
+        dir,
+        base: Mutex::new(fetched.stamp),
+        stop: AtomicBool::new(false),
+        on_event,
+    });
+    state
+        .externals
+        .lock()
+        .unwrap()
+        .insert(edit_id, Arc::clone(&edit));
+
+    // Controllo periodico: quando la data o la dimensione cambiano e restano uguali per un secondo
+    // (il programma ha finito di scrivere) si avvisa la UI.
+    tauri::async_runtime::spawn(async move {
+        let stamp = |p: &std::path::Path| {
+            std::fs::metadata(p)
+                .ok()
+                .map(|m| (m.len(), m.modified().ok()))
+        };
+        let mut known = stamp(&edit.local_path);
+        let mut candidate = None;
+        while !edit.stop.load(Ordering::Relaxed) {
+            tokio::time::sleep(EXTERNAL_POLL).await;
+            let now = stamp(&edit.local_path);
+            if now.is_none() || now == known {
+                candidate = None;
+                continue;
+            }
+            if candidate == now {
+                known = now;
+                candidate = None;
+                let _ = edit.on_event.send(ExternalEvent::Changed { edit_id });
+            } else {
+                candidate = now;
+            }
+        }
+    });
+    Ok(ExternalOpened {
+        edit_id,
+        name,
+        reused: false,
+    })
+}
+
+/// Ricarica sul server il file modificato. Se sul server è cambiato dopo il download risponde
+/// `conflict` senza scrivere; con `force` sovrascrive comunque.
+#[tauri::command]
+async fn external_edit_push(
+    state: Shared<'_>,
+    edit_id: u64,
+    force: bool,
+) -> Result<fs_edit::SaveOutcome, String> {
+    let edit = state
+        .externals
+        .lock()
+        .unwrap()
+        .get(&edit_id)
+        .cloned()
+        .ok_or("file non più aperto con l'editor di sistema")?;
+    let fs = sftp_for(&state, edit.conn).await?;
+    let base = (!force).then(|| *edit.base.lock().unwrap());
+    let r = fs_external::push(
+        &*fs,
+        &edit.local_path,
+        &edit.remote_path,
+        base,
+        fs_external::MAX_EXTERNAL_BYTES,
+    )
+    .await;
+    let saved = matches!(r, Ok(fs_edit::SaveOutcome::Saved { .. }));
+    if let Ok(fs_edit::SaveOutcome::Saved { size, modified }) = &r {
+        *edit.base.lock().unwrap() = fs_edit::Stamp {
+            size: *size,
+            modified: *modified,
+        };
+    }
+    audit_conn(
+        &state,
+        edit.conn,
+        "sftp_external_push",
+        saved,
+        if saved { "1 file" } else { "0 file" }.to_string(),
+    );
+    r.map_err(err)
+}
+
+/// Smette di seguire il file ed elimina la copia temporanea.
+#[tauri::command]
+fn external_edit_stop(state: Shared<'_>, edit_id: u64) {
+    if let Some(edit) = state.externals.lock().unwrap().remove(&edit_id) {
+        edit.stop.store(true, Ordering::Relaxed);
+        let _ = std::fs::remove_dir_all(&edit.dir);
+    }
+}
+
+/// Alla chiusura di una connessione i suoi file aperti con l'editor di sistema vengono eliminati.
+fn external_edit_close_conn(state: &AppState, conn: u64) {
+    let doomed: Vec<(u64, Arc<ExternalEdit>)> = {
+        let mut map = state.externals.lock().unwrap();
+        let ids: Vec<u64> = map
+            .iter()
+            .filter(|(_, e)| e.conn == conn)
+            .map(|(k, _)| *k)
+            .collect();
+        ids.into_iter()
+            .filter_map(|k| map.remove(&k).map(|e| (k, e)))
+            .collect()
+    };
+    for (edit_id, edit) in doomed {
+        edit.stop.store(true, Ordering::Relaxed);
+        let _ = std::fs::remove_dir_all(&edit.dir);
+        let _ = edit.on_event.send(ExternalEvent::Closed { edit_id });
+    }
+}
+
 /// Piano di trasferimento in attesa, legato alla connessione per cui è stato calcolato.
 struct StoredPlan {
     conn: u64,
@@ -1455,6 +1763,7 @@ async fn ssh_inject_cwd(state: Shared<'_>, id: u64, shell: String) -> Result<(),
 
 #[tauri::command]
 async fn ssh_close(state: Shared<'_>, id: u64) -> Result<(), String> {
+    external_edit_close_conn(&state, id);
     state.sftp.lock().await.remove(&id);
     state.conn_ctx.lock().unwrap().remove(&id);
     let shell = state.shells.lock().unwrap().remove(&id);
@@ -1528,6 +1837,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let dir = resolve_data_dir(app)?;
+            external_cleanup_stale();
             app.manage(Arc::new(AppState::new(dir)));
             Ok(())
         })
@@ -1556,6 +1866,9 @@ pub fn run() {
             sftp_rename,
             sftp_mkdir,
             sftp_read_text,
+            external_edit_open,
+            external_edit_push,
+            external_edit_stop,
             sftp_write_text,
             transfer_plan_upload,
             transfer_plan_download,
@@ -1571,13 +1884,44 @@ pub fn run() {
             known_hosts_list,
             known_hosts_remove
         ])
-        .run(tauri::generate_context!())
-        .expect("errore nell'avvio di PiCoXterm");
+        .build(tauri::generate_context!())
+        .expect("errore nell'avvio di PiCoXterm")
+        .run(|_app, event| {
+            // All'uscita le copie temporanee dei file aperti con l'editor di sistema spariscono.
+            if let tauri::RunEvent::Exit = event {
+                let _ = std::fs::remove_dir_all(external_root());
+            }
+        });
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn runnable_files_are_not_opened_with_the_system_program() {
+        for name in [
+            "deploy.sh",
+            "x.BAT",
+            "a.b.exe",
+            "tool.PY",
+            "run.ps1",
+            "setup.cmd",
+        ] {
+            assert!(is_runnable(name), "{name}");
+        }
+        for name in [
+            "notes.txt",
+            "report.pdf",
+            "photo.jpg",
+            "Makefile",
+            "archive.tar.gz",
+            ".bashrc",
+            "data.xlsx",
+        ] {
+            assert!(!is_runnable(name), "{name}");
+        }
+    }
 
     #[test]
     fn names_for_rename_and_mkdir_are_validated() {

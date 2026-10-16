@@ -11,6 +11,8 @@
   import Icon from './lib/Icon.svelte'
   import SftpPanel from './lib/SftpPanel.svelte'
   import TransferBar from './lib/TransferBar.svelte'
+  import ExternalEditBar from './lib/ExternalEditBar.svelte'
+  import { openExternal } from './lib/external.svelte'
   import { loadSettings } from './lib/settings.svelte'
   import { deleteNode, duplicateSession, listNodes, saveNode } from './lib/api'
   import { invoke } from '@tauri-apps/api/core'
@@ -139,6 +141,12 @@
     const tab: Tab = { key: nextKey++, kind: 'editor', title: entry.name, target: owner.target, connId, cwd: '', status: 'connected', tracking: owner.tracking, editPath: entry.path, dirty: false }
     tabs.push(tab)
     activeKey = tab.key
+  }
+
+  /** Apre un file remoto con il programma di sistema; un eventuale errore compare nell'avviso in alto. */
+  async function openWithSystem(connId: number, entry: SftpEntry) {
+    const error = await openExternal(connId, entry)
+    notice = error ?? ''
   }
 
   /** Chiude una scheda; un editor con modifiche non salvate chiede prima conferma. */
@@ -296,6 +304,7 @@
         tracking={panelTab?.tracking ?? { state: 'pending', shell: null, message: null }}
         onenabletracking={enableTracking}
         onedit={openEditor}
+        onexternal={openWithSystem}
         sessionName={panelTab?.title ?? ''}
         sessionColor={sessionUi(panelTab?.target.sessionId)?.color ?? null}
         {wide}
@@ -352,6 +361,7 @@
         <p class="welcome">{t('welcome')}</p>
       {/if}
     </div>
+    <ExternalEditBar />
     <TransferBar />
   </section>
 </main>

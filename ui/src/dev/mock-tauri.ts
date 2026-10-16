@@ -49,6 +49,9 @@ const eventChannels = new Map<number, string>()
 let connSeq = 6
 ;(window as any).__emitCwd = (path: string, connId?: number) =>
   emit(connId !== undefined ? eventChannels.get(connId)! : (window as any).__lastEvent, { type: 'cwd', path })
+let externalSeq = 700
+const externalChannels = new Map<number, string>()
+;(window as any).__externalChanged = (editId: number) => emit(externalChannels.get(editId)!, { type: 'changed', editId })
 const fileTexts: Record<string, { content: string; modified: number; size: number }> = {}
 ;(window as any).__externalEdit = (path: string) => {
   const c = fileTexts[path]
@@ -164,6 +167,24 @@ const handlers: Record<string, (args: any) => unknown> = {
     return `${parent}/${name}`
   },
   // Editor integrato: contenuti finti in memoria. `__externalEdit(path)` simula la modifica di un altro utente.
+  // Editor di sistema finto: `__externalChanged(editId)` simula il salvataggio del programma esterno.
+  external_edit_open: ({ path, onEvent }) => {
+    if (/\.(sh|py|bat)$/i.test(path)) throw 'Questo tipo di file potrebbe essere eseguito dal sistema invece di aprirsi in un editor: usa l\u2019editor integrato (Modifica).'
+    const editId = ++externalSeq
+    externalChannels.set(editId, onEvent)
+    ;(window as any).__lastExternalOpen = path
+    return { editId, name: path.split('/').pop(), reused: false }
+  },
+  external_edit_push: ({ editId, force }) => {
+    ;(window as any).__lastExternalPush = { editId, force }
+    if (!force && (window as any).__externalConflict) return { status: 'conflict', size: 10, modified: 1, missing: false }
+    ;(window as any).__externalConflict = false
+    return { status: 'saved', size: 10, modified: 2 }
+  },
+  external_edit_stop: ({ editId }) => {
+    ;(window as any).__lastExternalStop = editId
+    externalChannels.delete(editId)
+  },
   sftp_read_text: ({ path }) => {
     if (path.endsWith('.iso')) throw 'file troppo grande per l’editor (5000000000 byte, limite 5242880)'
     const c = (fileTexts[path] ??= { content: `# ${path}\nexport PATH=$PATH:/opt/bin\necho "ciao"\n`, modified: 1_700_000_000, size: 60 })

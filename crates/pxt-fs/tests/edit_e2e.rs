@@ -204,3 +204,93 @@ async fn refuses_binary_large_and_directories() {
     ));
     env.cleanup().await;
 }
+
+#[tokio::test]
+#[ignore = "richiede il container di testenv"]
+async fn system_editor_roundtrip_detects_concurrent_change_and_keeps_mode() {
+    use pxt_fs::external::{fetch, push, MAX_EXTERNAL_BYTES};
+
+    let env = setup().await;
+    env.put("config.ini", b"[a]\nx=1\n").await;
+    env.fs
+        .set_permissions(&env.p("config.ini"), 0o640)
+        .await
+        .unwrap();
+
+    let dir = std::env::temp_dir().join(format!("pxt-ext-{}", env.root.replace('/', "_")));
+    std::fs::create_dir_all(&dir).unwrap();
+    let got = fetch(&env.fs, &env.p("config.ini"), &dir, MAX_EXTERNAL_BYTES)
+        .await
+        .unwrap();
+    assert_eq!(std::fs::read(&got.local_path).unwrap(), b"[a]\nx=1\n");
+
+    // L'editor di sistema salva: si ricarica sul server.
+    std::fs::write(&got.local_path, b"[a]\nx=2\n[b]\ny=3\n").unwrap();
+    let out = push(
+        &env.fs,
+        &got.local_path,
+        &env.p("config.ini"),
+        Some(got.stamp),
+        MAX_EXTERNAL_BYTES,
+    )
+    .await
+    .unwrap();
+    let SaveOutcome::Saved { size, modified } = out else {
+        panic!("atteso Saved, ottenuto {out:?}");
+    };
+    let st = env.fs.stat(&env.p("config.ini")).await.unwrap();
+    assert_eq!(st.size, 16);
+    assert_eq!(st.mode.unwrap() & 0o777, 0o640, "permessi invariati");
+    let after = Stamp { size, modified };
+
+    // Un secondo salvataggio con il nuovo stato di riferimento funziona ancora.
+    std::fs::write(&got.local_path, b"[a]\nx=9\n").unwrap();
+    let out = push(
+        &env.fs,
+        &got.local_path,
+        &env.p("config.ini"),
+        Some(after),
+        MAX_EXTERNAL_BYTES,
+    )
+    .await
+    .unwrap();
+    assert!(matches!(out, SaveOutcome::Saved { .. }));
+
+    // Qualcun altro cambia il file sul server: con lo stato vecchio c'è conflitto.
+    env.put("config.ini", b"cambiato da un altro utente\n")
+        .await;
+    let out = push(
+        &env.fs,
+        &got.local_path,
+        &env.p("config.ini"),
+        Some(after),
+        MAX_EXTERNAL_BYTES,
+    )
+    .await
+    .unwrap();
+    assert!(matches!(out, SaveOutcome::Conflict { missing: false, .. }));
+    // Con `base` assente (sovrascrittura voluta) si scrive comunque.
+    let out = push(
+        &env.fs,
+        &got.local_path,
+        &env.p("config.ini"),
+        None,
+        MAX_EXTERNAL_BYTES,
+    )
+    .await
+    .unwrap();
+    assert!(matches!(out, SaveOutcome::Saved { .. }));
+
+    // Limite di dimensione e cartelle.
+    env.put("grande.bin", &vec![b'a'; 4096]).await;
+    assert!(matches!(
+        fetch(&env.fs, &env.p("grande.bin"), &dir, 1024).await,
+        Err(FsError::TooLarge { .. })
+    ));
+    assert!(matches!(
+        fetch(&env.fs, &env.root, &dir, MAX_EXTERNAL_BYTES).await,
+        Err(FsError::NotRegularFile(_))
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    env.cleanup().await;
+}

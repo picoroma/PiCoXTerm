@@ -18,6 +18,7 @@ Current release: **0.1.0-beta.1** (Windows only, unsigned). See the [changelog](
 - Follows the terminal's current directory (OSC 7, with automatic injection for bash, zsh and tcsh) and takes the terminal to a folder ("go to this folder in the terminal")
 - Browse, upload and download files and folders (with a conflict dialog), four files at a time, with pause, resume and retry of failed files; drag and drop from Explorer, delete, rename, new folder, properties and chmod (recursive optional), copy path
 - **Built-in text editor** (right-click → Edit, or double-click): CodeMirror 6 with syntax highlighting, search and replace, encoding and line-ending preservation, concurrent-modification check, 5 MiB limit. The content stays in memory, no temporary files on disk
+- "Open with system program" for any file up to 100 MiB (PDFs, images, spreadsheets...): a temporary copy is opened with the program the system associates, and saving it offers to upload it back. Scripts and executables are refused (use the built-in editor)
 - The panel shows the name and colour of the active SSH session
 
 **Sessions and settings**
@@ -32,7 +33,7 @@ Current release: **0.1.0-beta.1** (Windows only, unsigned). See the [changelog](
 
 ## Planned
 
-- **M2** (rest): "open with system editor"
+- **M2** (rest): acceptance checks on real workloads
 - **M3**: plain SFTP sessions, FTP/FTPS and S3 with a dual-pane file browser
 - **M4**: RDP (external client) and VNC
 - **M5 and later**: MobaXterm import, signed installers, Devolutions RDM provider
@@ -82,7 +83,7 @@ The design documents are written in Italian.
 
 ## Status
 
-M0 (technical spike) and M1 (tabbed SSH and local sessions) are complete. Current milestone: **M2** (SFTP panel that follows the directory), with the panel, transfers (parallel, resumable), file operations and editor done; "open with system editor" remains.
+M0 (technical spike) and M1 (tabbed SSH and local sessions) are complete. Current milestone: **M2** (SFTP panel that follows the directory), with the panel, transfers (parallel, resumable), file operations and editor done; "open with system program" is done too.
 
 ## Licence
 

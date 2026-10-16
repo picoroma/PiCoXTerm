@@ -23,6 +23,7 @@
     tracking,
     onenabletracking,
     onedit,
+    onexternal,
     sessionName = '',
     sessionColor = null,
   }: {
@@ -42,6 +43,8 @@
     onenabletracking: () => void
     /** Apre un file nell'editor integrato. */
     onedit?: (connId: number, entry: SftpEntry) => void
+    /** Apre un file con il programma di sistema (copia temporanea che si ricarica al salvataggio). */
+    onexternal?: (connId: number, entry: SftpEntry) => void
     /** Nome e colore della sessione SSH della scheda attiva, per capire a quale server appartengono i file. */
     sessionName?: string
     sessionColor?: string | null
@@ -462,6 +465,13 @@
     if (single) dialog = { type: 'props', entry: single }
   }
 
+  /** Limite per l'apertura con il programma di sistema (lo stesso del backend). */
+  const MAX_EXTERNAL_BYTES = 100 * 1024 * 1024
+
+  function externalSelected() {
+    if (connId !== null && single?.kind === 'file') onexternal?.(connId, single)
+  }
+
   function editSelected() {
     if (connId !== null && single?.kind === 'file') onedit?.(connId, single)
   }
@@ -697,6 +707,9 @@
       {/if}
       {#if onedit}
         <button role="menuitem" disabled={!single || single.kind !== 'file' || single.size > MAX_EDIT_BYTES} title={single && single.size > MAX_EDIT_BYTES ? t('editTooLarge') : undefined} onclick={() => pick(editSelected)}>{t('edit')}</button>
+      {/if}
+      {#if onexternal}
+        <button role="menuitem" disabled={!single || single.kind !== 'file' || single.size > MAX_EXTERNAL_BYTES} title={single && single.size > MAX_EXTERNAL_BYTES ? t('externalTooLarge') : undefined} onclick={() => pick(externalSelected)}>{t('openExternal')}</button>
       {/if}
       <hr />
     {/if}
