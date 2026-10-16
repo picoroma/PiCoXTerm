@@ -5,7 +5,8 @@ export const ABOUT = {
   /** Licenza del progetto. Vuota = "da definire". */
   license: '',
   /** Frase sotto l'immagine (in corsivo). Vuota = non mostrata. */
-  incipit: '',
+  incipit:
+    'Oh, gioveni! Quando vi dico "sequitemi miei pugnaci", dovete sequire et pugnare! Poche fotte! Se no qui stiamo a prenderci per le natiche.',
 }
 
 // Immagine della finestra: basta mettere un file chiamato `about.jpg` (o .jpeg, .png, .webp, .svg)
