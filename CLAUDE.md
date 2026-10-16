@@ -35,6 +35,7 @@ Documenti di riferimento (leggerli prima di iniziare una milestone):
 - Stringhe UI esternalizzate (i18n it/en) dal primo giorno.
 - Test: unit test nei crate; integration test contro `testenv/` (docker-compose).
 - Commit piccoli, messaggi in inglese, formato conventional commits (`feat:`, `fix:`, `docs:`...).
+- **README, CHANGELOG, note di rilascio GitHub e file allegati alle release in inglese** (deciso il 2026-10-16). I documenti di progettazione in `docs/` e questo file restano in italiano.
 
 ## Come lavorare con Francesco
 

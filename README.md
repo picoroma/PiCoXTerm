@@ -1,57 +1,65 @@
 # PiCoXterm
 
-Client di accesso remoto leggero, ispirato a MobaXterm ma essenziale e "auditabile per costruzione".
-Windows, Linux, macOS · Tauri 2 + Rust · terminale xterm.js.
+A lightweight remote access client, inspired by MobaXterm but minimal and "auditable by construction".
+Windows, Linux, macOS · Tauri 2 + Rust · xterm.js terminal.
 
-## Cosa fa oggi (M1 in corso)
+Current release: **0.1.0-beta.1** (Windows only, unsigned). See the [changelog](CHANGELOG.md).
+
+## What it does today (M2 nearly complete)
 
 **SSH**
-- Terminale a schede (xterm.js): copia su selezione, incolla con il tasto destro, avviso per incolla multiriga, ricerca nello scrollback (Ctrl+Maiusc+F), zoom con Ctrl+rotella
-- Autenticazione con password, chiave privata (OpenSSH e `.ppk`, con passphrase) o agent (Pageant, agent OpenSSH di Windows, `SSH_AUTH_SOCK`)
-- **Jump host** a catena (fino a 5), senza aprire porte locali
-- **Host key**: conferma con fingerprint (accetta una volta, accetta e salva, annulla); se la chiave cambia la connessione è bloccata e si sblocca solo rimuovendo la voce salvata
-- Tracciamento della directory corrente del terminale (OSC 7, con iniezione per bash e tcsh): base del futuro pannello SFTP
-- "Prova connessione" senza aprire la shell, riconnessione nella stessa scheda, Quick connect (`utente@host:porta`)
+- Tabbed terminal (xterm.js): copy on select, right-click paste, multi-line paste warning, scrollback search (Ctrl+Shift+F), zoom with Ctrl+wheel
+- Authentication with password, private key (OpenSSH and `.ppk`, with passphrase) or agent (Pageant, Windows OpenSSH agent, `SSH_AUTH_SOCK`)
+- Chained **jump hosts** (up to 5), without opening local ports
+- **Host keys**: confirmation with fingerprint (accept once, accept and save, cancel); if a key changes the connection is blocked until the saved entry is removed
+- "Test connection" without opening a shell, reconnect in the same tab, Quick connect (`user@host:port`)
 
-**Sessioni e impostazioni**
-- Albero di cartelle e sessioni con filtro, trascinamento, duplica; password e passphrase solo nel keyring di sistema, mai nel file JSON
-- Aspetto per sessione: tema, font, sfondo e colore della scheda (utile per distinguere PROD, TEST e DEV)
-- Temi (scuro, chiaro, Solarized, Dracula), font, scrollback e opzioni di copia/incolla configurabili
-- Esportazione e importazione delle sessioni in JSON, senza segreti
-- Log di audit (JSON Lines, con rotazione) di connessioni e host key, senza credenziali né contenuti di sessione
-- Interfaccia in italiano e inglese
-- Modalità portabile: un file `portable.flag` accanto all'eseguibile sposta i dati nella cartella `data/` (i segreti restano nel keyring di sistema)
+**SFTP panel** (same SSH connection, no second login)
+- Follows the terminal's current directory (OSC 7, with automatic injection for bash, zsh and tcsh) and takes the terminal to a folder ("go to this folder in the terminal")
+- Browse, upload and download files and folders (with a conflict dialog), drag and drop from Explorer, delete, rename, new folder, properties and chmod (recursive optional), copy path
+- **Built-in text editor** (right-click → Edit, or double-click): CodeMirror 6 with syntax highlighting, search and replace, encoding and line-ending preservation, concurrent-modification check, 5 MiB limit. The content stays in memory, no temporary files on disk
+- The panel shows the name and colour of the active SSH session
 
-## Cosa è previsto
+**Sessions and settings**
+- Tree of folders and sessions with filter, drag and drop, duplicate; "New session" dialog with protocol picker (only SSH is available for now)
+- Passwords and passphrases only in the system keyring, never in the JSON file
+- Per-session appearance: theme, font, background and tab colour (handy to tell PROD, TEST and DEV apart)
+- Themes (dark, light, Solarized, Dracula), font, scrollback and copy/paste options
+- Session export and import as JSON, without secrets
+- Audit log (JSON Lines, rotated) of connections, host keys and file operations: counts only, no credentials, names or session content
+- Italian and English interface
+- Portable mode: a `portable.flag` file next to the executable moves the data to the `data/` folder (secrets stay in the system keyring)
 
-- **M2**: pannello SFTP che segue la directory del terminale, con coda dei trasferimenti
-- **M3**: sessioni SFTP, FTP/FTPS e S3 con file browser a doppio pannello
-- **M4**: RDP (client esterno) e VNC
-- **M5 e oltre**: import da MobaXterm, installer firmati, provider Devolutions RDM
-- **Backlog**: X11 forwarding e, a fasi, un X server (vedi sezione 6.7 delle specifiche); strumenti di diagnosi di rete (ping, verifica porte, porte in ascolto di un server via SSH, sezione 6.8)
+## Planned
 
-Dettagli e criteri di accettazione in [docs/ROADMAP.md](docs/ROADMAP.md).
+- **M2** (rest): resumable and parallel transfers, "open with system editor"
+- **M3**: plain SFTP sessions, FTP/FTPS and S3 with a dual-pane file browser
+- **M4**: RDP (external client) and VNC
+- **M5 and later**: MobaXterm import, signed installers, Devolutions RDM provider
+- **Backlog**: X11 forwarding and, in phases, an X server (spec section 6.7); network diagnostic tools (ping, port check, listening ports of a server over SSH, section 6.8)
 
-## Principi di sicurezza
+Details and acceptance criteria in [docs/ROADMAP.md](docs/ROADMAP.md).
 
-- **Zero porte in ascolto**: solo connessioni in uscita
-- Nessun segreto su disco in chiaro, né nei log
-- Host key sconosciute o cambiate non vengono mai accettate in silenzio
-- Nessun server integrato, nessuna shell locale, nessuna telemetria
-- Dipendenze permissive controllate da `cargo deny` (licenze, advisory, sorgenti)
+## Security principles
 
-Cosa **non** fa, per scelta: nessun server integrato, nessuna porta in ascolto, nessuna shell locale. X server (a fasi) e alcuni strumenti di rete di diagnosi sono in backlog, dopo la v1.
+- **Zero listening ports**: outgoing connections only
+- No secret on disk in clear text, nor in logs
+- Unknown or changed host keys are never accepted silently
+- No built-in server, no local shell, no telemetry
+- Permissive dependencies checked by `cargo deny` (licences, advisories, sources)
 
-## Sviluppo
+What it deliberately does **not** do: no built-in server, no listening port, no local shell. An X server (in phases) and some network diagnostic tools are in the backlog, after v1.
 
-Servono Rust (stable), Node.js e, su Windows, le Build Tools di Visual Studio.
+## Development
+
+You need Rust (stable), Node.js and, on Windows, the Visual Studio Build Tools.
 
 ```
-cd ui && npm install && npm run build   # frontend, incorporato nell'eseguibile
+cd ui && npm install && npm run build   # frontend, embedded in the executable
 cd .. && cargo build --release -p picoxterm
 ```
 
-L'eseguibile è `target/release/picoxterm.exe`.
+The executable is `target/release/picoxterm.exe`.
 
 ```
 cargo fmt --all --check
@@ -60,20 +68,22 @@ cargo test --workspace
 cd ui && npm run check
 ```
 
-Le prove end-to-end (autenticazione, jump host, host key) girano contro un server SSH di prova in Docker e non fanno parte della CI. Istruzioni in [testenv/README.md](testenv/README.md).
+End-to-end tests (authentication, jump hosts, host keys, SFTP, transfers, editor) run against test SSH servers in Docker and are not part of CI. Instructions in [testenv/README.md](testenv/README.md).
 
-Per provare l'interfaccia in un browser, senza Tauri, con un backend finto: `npm --prefix ui run dev` (solo sviluppo, non finisce nell'eseguibile).
+To try the interface in a browser, without Tauri, with a fake backend: `npm --prefix ui run dev` (development only, not part of the executable).
 
-## Documentazione
+## Documentation
 
-- [Specifiche](docs/SPECIFICHE.md): architettura, modello dati, sicurezza e decisioni registrate (sezione 12)
-- [Roadmap](docs/ROADMAP.md): milestone e criteri di accettazione
-- [Report dello spike M0](docs/spike-m0.md)
+The design documents are written in Italian.
 
-## Stato
+- [Specifications](docs/SPECIFICHE.md): architecture, data model, security and recorded decisions (section 12)
+- [Roadmap](docs/ROADMAP.md): milestones and acceptance criteria
+- [M0 spike report](docs/spike-m0.md)
 
-M0 (spike tecnico) concluso con esito favorevole. Milestone corrente: **M1** (SSH a schede e sessioni locali). Restano da chiudere in M1 la verifica dei criteri di accettazione e alcune rifiniture (per esempio `keyboard-interactive`, non prioritario).
+## Status
 
-## Licenza
+M0 (technical spike) and M1 (tabbed SSH and local sessions) are complete. Current milestone: **M2** (SFTP panel that follows the directory), with the panel, transfers, file operations and editor done; resumable and parallel transfers remain.
 
-Da definire.
+## Licence
+
+To be decided.
