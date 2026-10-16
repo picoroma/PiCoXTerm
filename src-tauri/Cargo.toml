@@ -23,7 +23,7 @@ tokio = { workspace = true, features = ["sync"] }
 tauri-plugin-clipboard-manager = "2.5.0"
 uuid = { version = "1.28.0", features = ["serde"] }
 tauri-plugin-dialog = "2.8.3"
-pxt-fs = { version = "0.1.0", path = "../crates/pxt-fs" }
+pxt-fs = { path = "../crates/pxt-fs" }
 
 [features]
 # Incorpora il frontend nell'exe (la CLI di Tauri lo attiva da sola; con cargo build va esplicito)

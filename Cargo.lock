@@ -3422,7 +3422,7 @@ dependencies = [
 
 [[package]]
 name = "picoxterm"
-version = "0.1.0"
+version = "0.1.0-beta.1"
 dependencies = [
  "pxt-core",
  "pxt-fs",
@@ -3708,7 +3708,7 @@ checksum = "d55d956fa96f5ec02be2e13af0e20391a5aa83d6a074e3ad368959d0fab299ea"
 
 [[package]]
 name = "pxt-core"
-version = "0.1.0"
+version = "0.1.0-beta.1"
 dependencies = [
  "chrono",
  "keyring",
@@ -3722,7 +3722,7 @@ dependencies = [
 
 [[package]]
 name = "pxt-fs"
-version = "0.1.0"
+version = "0.1.0-beta.1"
 dependencies = [
  "pxt-ssh",
  "russh-sftp",
@@ -3733,7 +3733,7 @@ dependencies = [
 
 [[package]]
 name = "pxt-ssh"
-version = "0.1.0"
+version = "0.1.0-beta.1"
 dependencies = [
  "russh",
  "thiserror 2.0.21",
