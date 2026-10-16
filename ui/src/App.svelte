@@ -237,6 +237,8 @@
         liveIds={liveConnIds}
         tracking={activeTab?.tracking ?? { state: 'pending', shell: null, message: null }}
         onenabletracking={enableTracking}
+        sessionName={activeTab?.title ?? ''}
+        sessionColor={sessionUi(activeTab?.target.sessionId)?.color ?? null}
         {wide}
         onwiden={() => (wide = !wide)}
       />

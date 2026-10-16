@@ -22,6 +22,8 @@
     onwiden,
     tracking,
     onenabletracking,
+    sessionName = '',
+    sessionColor = null,
   }: {
     /** Connessione SSH della scheda attiva (null se non c'è o non è collegata). */
     connId: number | null
@@ -37,6 +39,9 @@
     tracking: TrackingInfo
     /** Attiva a mano il tracciamento. */
     onenabletracking: () => void
+    /** Nome e colore della sessione SSH della scheda attiva, per capire a quale server appartengono i file. */
+    sessionName?: string
+    sessionColor?: string | null
   } = $props()
 
   interface PanelState {
@@ -521,7 +526,20 @@
 
 <svelte:window onclick={() => (menu = null)} onkeydown={(e) => e.key === 'Escape' && (menu = null)} />
 
-<section class="sftp" class:dropping={dropActive} bind:this={panelEl} aria-label={t('sftp')}>
+<section
+  class="sftp"
+  class:dropping={dropActive}
+  class:colored={!!sessionColor}
+  style:--sc={sessionColor ?? undefined}
+  bind:this={panelEl}
+  aria-label={t('sftp')}
+>
+  {#if sessionName}
+    <div class="caption" title={sessionName}>
+      <span class="label">{t('sftp')}</span>
+      <span class="nm">{sessionName}</span>
+    </div>
+  {/if}
   <div class="head">
     <span class="group" role="group" aria-label={t('navigation')}>
       <button type="button" title={t('back')} aria-label={t('back')} disabled={!cur || cur.index <= 0} onclick={() => goHistory(-1)}><Icon name="arrow-left" /></button>
@@ -803,6 +821,32 @@
   }
   .sftp {
     position: relative;
+  }
+  /* Il pannello porta il colore della sessione della scheda attiva (come la riga sopra la scheda). */
+  .sftp.colored {
+    border-top: 3px solid var(--sc);
+  }
+  .caption {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    padding: 3px 8px 0;
+    font-size: 12px;
+    min-width: 0;
+  }
+  .sftp.colored .caption {
+    background: color-mix(in srgb, var(--sc) 16%, transparent);
+    padding-bottom: 3px;
+  }
+  .caption .label {
+    color: var(--fg-dim);
+    flex: none;
+  }
+  .caption .nm {
+    font-weight: 600;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .sftp.dropping {
     outline: 2px dashed var(--accent);

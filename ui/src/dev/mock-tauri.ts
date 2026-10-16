@@ -13,7 +13,11 @@ pw.ui.theme = 'dracula'
 pw.ui.fontSize = 16
 const key = { ...newSession(null), name: 'jump (chiave)', host: '10.0.0.2', username: 'adm' }
 key.auth = { method: 'key', keyPath: 'C:\\keys\\id_ed25519' }
-let nodes: SessionNode[] = [root, pw, key]
+const prod = { ...newSession(null), name: 'PROD srv', host: 'srv', username: 'u' }
+prod.ui.color = '#c0392b'
+const test = { ...newSession(null), name: 'TEST srv', host: 'srv', username: 'u' }
+test.ui.color = '#2f6fed'
+let nodes: SessionNode[] = [root, pw, key, prod, test]
 
 let nextCallback = 0
 const callbacks = new Map<number, (m: unknown) => void>()
@@ -158,6 +162,8 @@ const handlers: Record<string, (args: any) => unknown> = {
   },
   // host "newhost" = chiave sconosciuta; "changed" = chiave cambiata; altro = chiede la password
   ssh_connect: async ({ request, onEvent }) => {
+    // Le sessioni salvate arrivano con il solo id: l'host si ricava dall'elenco.
+    request = { ...request, host: request.host ?? (nodes.find((n) => n.id === request.sessionId) as any)?.host }
     if (request.host === 'srv' || request.host === 'srv-ash') {
       ;(window as any).__lastEvent = onEvent
       const connId = ++connSeq
