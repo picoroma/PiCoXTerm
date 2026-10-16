@@ -40,7 +40,11 @@ const fakeFs: Record<string, any[]> = {
   '/conflict': [f('a.txt', '/conflict', 10), f('b.log', '/conflict', 20)],
   '/etc': [f('passwd', '/etc', 1900), f('hosts', '/etc', 200), d('ssh', '/etc')],
 }
-;(window as any).__emitCwd = (path: string) => emit((window as any).__lastEvent, { type: 'cwd', path })
+;// Ogni connessione ha il suo canale di eventi: __emitCwd(path, connId) simula il terminale di quella scheda.
+const eventChannels = new Map<number, string>()
+let connSeq = 6
+;(window as any).__emitCwd = (path: string, connId?: number) =>
+  emit(connId !== undefined ? eventChannels.get(connId)! : (window as any).__lastEvent, { type: 'cwd', path })
 const plans = new Map<number, any>()
 const jobStates = new Map<number, { cancelled: boolean }>()
 let planSeq = 100
@@ -156,9 +160,11 @@ const handlers: Record<string, (args: any) => unknown> = {
   ssh_connect: async ({ request, onEvent }) => {
     if (request.host === 'srv' || request.host === 'srv-ash') {
       ;(window as any).__lastEvent = onEvent
+      const connId = ++connSeq
+      eventChannels.set(connId, onEvent)
       const unsupported = request.host === 'srv-ash'
       setTimeout(() => emit(onEvent, unsupported ? { type: 'tracking', state: 'unsupported', shell: '/bin/ash', message: null } : { type: 'tracking', state: 'active', shell: '/bin/bash', message: null }), 400)
-      return unsupported ? 8 : 7
+      return connId
     }
     if (request.host === 'changed') {
       emit(onEvent, { type: 'hostKeyChanged', host: 'changed', port: 22, expected: 'SHA256:vecchia1111', got: 'SHA256:nuova2222' })
