@@ -77,6 +77,49 @@ const handlers: Record<string, (args: any) => unknown> = {
   ssh_resize: () => {},
   ssh_enable_cwd_tracking: () => ({ type: 'tracking', state: 'active', shell: '/bin/bash', message: null }),
   sftp_home: () => '/home/u',
+  // Operazioni di modifica sul filesystem finto
+  sftp_delete: ({ paths }) => {
+    const failed: any[] = []
+    let done = 0
+    for (const p of paths) {
+      if ((window as any).__failDelete?.includes(p)) {
+        failed.push({ path: p, message: 'permesso negato' })
+        continue
+      }
+      const parent = p.slice(0, p.lastIndexOf('/')) || '/'
+      fakeFs[parent] = (fakeFs[parent] ?? []).filter((e) => e.path !== p)
+      for (const k of Object.keys(fakeFs)) if (k === p || k.startsWith(p + '/')) delete fakeFs[k]
+      done++
+    }
+    ;(window as any).__lastDelete = paths
+    return { done, failed }
+  },
+  sftp_tree_info: () => ({ files: 12, dirs: 4, bytes: 3_456_789, partial: false }),
+  sftp_chmod: ({ path, mode, recursive }) => {
+    ;(window as any).__lastChmod = { path, mode: mode.toString(8), recursive }
+    const parent = path.slice(0, path.lastIndexOf('/')) || '/'
+    const e = (fakeFs[parent] ?? []).find((x) => x.path === path)
+    if (e) e.mode = mode
+    return { done: recursive ? 5 : 1, failed: [] }
+  },
+  sftp_rename: ({ path, newName }) => {
+    const parent = path.slice(0, path.lastIndexOf('/')) || '/'
+    const list = fakeFs[parent] ?? []
+    if (list.some((e) => e.name === newName)) throw `esiste già una voce chiamata "${newName}"`
+    const e = list.find((x) => x.path === path)
+    if (e) {
+      e.name = newName
+      e.path = `${parent === '/' ? '' : parent}/${newName}`
+    }
+    return e?.path
+  },
+  sftp_mkdir: ({ parent, name }) => {
+    const list = fakeFs[parent] ?? (fakeFs[parent] = [])
+    if (list.some((e) => e.name === name)) throw `esiste già una voce chiamata "${name}"`
+    list.push(d(name, parent))
+    fakeFs[`${parent === '/' ? '' : parent}/${name}`] = []
+    return `${parent}/${name}`
+  },
   sftp_list: ({ path }) => {
     if (!(path in fakeFs)) throw `percorso non trovato: ${path}`
     return fakeFs[path]

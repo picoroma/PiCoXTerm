@@ -8,6 +8,7 @@ use pxt_core::{
     KeyringSecretProvider, LocalSessionProvider, LocalSettings, Outcome, Protocol, Secret,
     SecretProvider, Session, SessionNode, SessionProvider, Settings,
 };
+use pxt_fs::ops as fs_ops;
 use pxt_fs::transfer as fs_transfer;
 use pxt_fs::transfer::{ConflictPolicy, Progress};
 use pxt_fs::{Entry, RemoteFs, SftpFs};
@@ -830,6 +831,158 @@ async fn sftp_list(state: Shared<'_>, id: u64, path: String) -> Result<Vec<Entry
     sftp_for(&state, id).await?.list(&path).await.map_err(err)
 }
 
+/// Registra nell'audit un'operazione di modifica sui file di una connessione (solo conteggi, mai nomi).
+fn audit_conn(state: &AppState, conn: u64, event: &str, ok: bool, detail: String) {
+    if let Some(ctx) = state.conn_ctx.lock().unwrap().get(&conn).cloned() {
+        let outcome = if ok { Outcome::Ok } else { Outcome::Failed };
+        state.audit(&ctx, event, outcome, Some(detail));
+    }
+}
+
+/// Nome valido per una voce: non vuoto, senza `/` né caratteri di controllo, e non `.` o `..`.
+fn valid_name(name: &str) -> Result<&str, String> {
+    let n = name.trim();
+    if n.is_empty() || n == "." || n == ".." || n.contains('/') || n.chars().any(|c| c.is_control())
+    {
+        return Err("nome non valido".into());
+    }
+    Ok(n)
+}
+
+fn parent_of(path: &str) -> String {
+    let trimmed = path.trim_end_matches('/');
+    match trimmed.rfind('/') {
+        Some(0) | None => "/".to_string(),
+        Some(i) => trimmed[..i].to_string(),
+    }
+}
+
+fn join_remote(dir: &str, name: &str) -> String {
+    fs_transfer::remote_join(dir, name)
+}
+
+/// Elimina file e cartelle (con tutto il contenuto). I link simbolici non vengono mai seguiti.
+#[tauri::command]
+async fn sftp_delete(
+    state: Shared<'_>,
+    id: u64,
+    paths: Vec<String>,
+) -> Result<fs_ops::OpReport, String> {
+    let fs = sftp_for(&state, id).await?;
+    let cancel = AtomicBool::new(false);
+    let mut total = fs_ops::OpReport::default();
+    for p in &paths {
+        match fs_ops::remove_recursive(&*fs, p, &cancel).await {
+            Ok(r) => {
+                total.done += r.done;
+                total.failed.extend(r.failed);
+            }
+            Err(e) => total.failed.push(fs_ops::OpFailure {
+                path: p.clone(),
+                message: e.to_string(),
+            }),
+        }
+    }
+    audit_conn(
+        &state,
+        id,
+        "sftp_delete",
+        total.failed.is_empty(),
+        format!(
+            "{} elementi eliminati, {} errori",
+            total.done,
+            total.failed.len()
+        ),
+    );
+    Ok(total)
+}
+
+/// Conta file, cartelle e byte di un percorso (per le proprietà di una cartella).
+#[tauri::command]
+async fn sftp_tree_info(
+    state: Shared<'_>,
+    id: u64,
+    path: String,
+) -> Result<fs_ops::TreeInfo, String> {
+    let fs = sftp_for(&state, id).await?;
+    fs_ops::tree_info(&*fs, &path, &AtomicBool::new(false))
+        .await
+        .map_err(err)
+}
+
+/// Cambia i permessi, anche su tutto il contenuto se `recursive`.
+#[tauri::command]
+async fn sftp_chmod(
+    state: Shared<'_>,
+    id: u64,
+    path: String,
+    mode: u32,
+    recursive: bool,
+) -> Result<fs_ops::OpReport, String> {
+    if mode > 0o7777 {
+        return Err("permessi non validi".into());
+    }
+    let fs = sftp_for(&state, id).await?;
+    let report = fs_ops::chmod(&*fs, &path, mode, recursive, &AtomicBool::new(false))
+        .await
+        .map_err(err)?;
+    audit_conn(
+        &state,
+        id,
+        "sftp_chmod",
+        report.failed.is_empty(),
+        format!(
+            "{:o}{}: {} elementi, {} errori",
+            mode,
+            if recursive { " ricorsivo" } else { "" },
+            report.done,
+            report.failed.len()
+        ),
+    );
+    Ok(report)
+}
+
+/// Rinomina una voce restando nella stessa cartella. Non sovrascrive: se il nome è già usato dà errore.
+#[tauri::command]
+async fn sftp_rename(
+    state: Shared<'_>,
+    id: u64,
+    path: String,
+    new_name: String,
+) -> Result<String, String> {
+    let name = valid_name(&new_name)?;
+    let fs = sftp_for(&state, id).await?;
+    let target = join_remote(&parent_of(&path), name);
+    if target == path {
+        return Ok(target);
+    }
+    if fs.lstat(&target).await.is_ok() {
+        return Err(format!("esiste già una voce chiamata \"{name}\""));
+    }
+    fs.rename(&path, &target).await.map_err(err)?;
+    audit_conn(&state, id, "sftp_rename", true, "1 elemento".into());
+    Ok(target)
+}
+
+/// Crea una cartella dentro `parent`.
+#[tauri::command]
+async fn sftp_mkdir(
+    state: Shared<'_>,
+    id: u64,
+    parent: String,
+    name: String,
+) -> Result<String, String> {
+    let name = valid_name(&name)?;
+    let fs = sftp_for(&state, id).await?;
+    let target = join_remote(&parent, name);
+    if fs.lstat(&target).await.is_ok() {
+        return Err(format!("esiste già una voce chiamata \"{name}\""));
+    }
+    fs.mkdir(&target).await.map_err(err)?;
+    audit_conn(&state, id, "sftp_mkdir", true, "1 cartella".into());
+    Ok(target)
+}
+
 /// Piano di trasferimento in attesa, legato alla connessione per cui è stato calcolato.
 struct StoredPlan {
     conn: u64,
@@ -1171,6 +1324,11 @@ pub fn run() {
             ssh_close,
             sftp_home,
             sftp_list,
+            sftp_delete,
+            sftp_tree_info,
+            sftp_chmod,
+            sftp_rename,
+            sftp_mkdir,
             transfer_plan_upload,
             transfer_plan_download,
             transfer_plan_discard,
@@ -1184,4 +1342,28 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("errore nell'avvio di PiCoXterm");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn names_for_rename_and_mkdir_are_validated() {
+        assert_eq!(valid_name("  nuova  ").unwrap(), "nuova");
+        assert_eq!(valid_name("con spazi.txt").unwrap(), "con spazi.txt");
+        for bad in ["", "   ", ".", "..", "a/b", "/", "tab\there"] {
+            assert!(valid_name(bad).is_err(), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn parent_of_handles_root_and_trailing_slashes() {
+        assert_eq!(parent_of("/home/u/file"), "/home/u");
+        assert_eq!(parent_of("/home/u/dir/"), "/home/u");
+        assert_eq!(parent_of("/file"), "/");
+        assert_eq!(parent_of("relativo"), "/");
+        assert_eq!(join_remote("/", "x"), "/x");
+        assert_eq!(join_remote("/a", "x"), "/a/x");
+    }
 }

@@ -4,7 +4,11 @@
   import { getCurrentWebview } from '@tauri-apps/api/webview'
   import { open as openDialog } from '@tauri-apps/plugin-dialog'
   import ConflictDialog from './ConflictDialog.svelte'
+  import { writeText } from '@tauri-apps/plugin-clipboard-manager'
+  import DeleteDialog from './DeleteDialog.svelte'
   import Icon from './Icon.svelte'
+  import NameDialog from './NameDialog.svelte'
+  import PropertiesDialog from './PropertiesDialog.svelte'
   import { discardPlan, startTransfer, type ConflictPolicy, type PlanSummary } from './transfers.svelte'
   import { t } from '../i18n'
   import type { SftpEntry, TrackingInfo } from './types'
@@ -60,6 +64,13 @@
   /** Piano in attesa di una scelta sui conflitti. */
   let pending = $state<{ plan: PlanSummary; title: string; onSettled: () => void } | null>(null)
   let menu = $state<{ x: number; y: number; entry: SftpEntry | null } | null>(null)
+
+  type Dialog =
+    | { type: 'delete'; entries: SftpEntry[]; busy: boolean; failures: { path: string; message: string }[] }
+    | { type: 'rename'; entry: SftpEntry; error: string }
+    | { type: 'mkdir'; error: string }
+    | { type: 'props'; entry: SftpEntry }
+  let dialog = $state<Dialog | null>(null)
   let pathInput = $state('')
 
   const cur = $derived(connId !== null ? states[connId] : undefined)
@@ -68,6 +79,8 @@
   const selectedEntries = $derived(cur ? cur.entries.filter((e) => selection.has(e.path)) : [])
   const hasFiles = $derived(selectedEntries.some((e) => e.kind === 'file'))
   const hasDirs = $derived(selectedEntries.some((e) => e.kind === 'dir'))
+  /** L'unico elemento selezionato (Rinomina e Proprietà valgono solo per uno alla volta). */
+  const single = $derived(selectedEntries.length === 1 ? selectedEntries[0] : null)
 
   const rows = $derived.by(() => {
     if (!cur) return []
@@ -337,6 +350,78 @@
     }
   }
 
+  // ---- Modifica: elimina, rinomina, nuova cartella, proprietà ----
+
+  function refreshCurrent() {
+    if (connId !== null && cur) void go(connId, cur.path, false)
+  }
+
+  function askDelete() {
+    if (selectedEntries.length > 0) dialog = { type: 'delete', entries: [...selectedEntries], busy: false, failures: [] }
+  }
+
+  async function confirmDelete() {
+    if (dialog?.type !== 'delete' || connId === null) return
+    const d = dialog
+    d.busy = true
+    try {
+      const r = await invoke<{ done: number; failed: { path: string; message: string }[] }>('sftp_delete', {
+        id: connId,
+        paths: d.entries.map((e) => e.path),
+      })
+      refreshCurrent()
+      if (r.failed.length > 0) {
+        d.failures = r.failed
+        d.busy = false
+      } else {
+        dialog = null
+      }
+    } catch (e) {
+      actionError = String(e)
+      dialog = null
+    }
+  }
+
+  function askRename() {
+    if (single) dialog = { type: 'rename', entry: single, error: '' }
+  }
+
+  async function confirmRename(name: string) {
+    if (dialog?.type !== 'rename' || connId === null) return
+    const d = dialog
+    try {
+      await invoke('sftp_rename', { id: connId, path: d.entry.path, newName: name })
+      dialog = null
+      refreshCurrent()
+    } catch (e) {
+      d.error = String(e)
+    }
+  }
+
+  function askMkdir() {
+    if (cur) dialog = { type: 'mkdir', error: '' }
+  }
+
+  async function confirmMkdir(name: string) {
+    if (dialog?.type !== 'mkdir' || connId === null || !cur) return
+    const d = dialog
+    try {
+      await invoke('sftp_mkdir', { id: connId, parent: cur.path, name })
+      dialog = null
+      refreshCurrent()
+    } catch (e) {
+      d.error = String(e)
+    }
+  }
+
+  function askProps() {
+    if (single) dialog = { type: 'props', entry: single }
+  }
+
+  function copyPaths() {
+    void writeText(selectedEntries.map((e) => e.path).join('\n'))
+  }
+
   // ---- Menu col tasto destro ----
 
   function rowMenu(ev: MouseEvent, e: SftpEntry) {
@@ -399,6 +484,18 @@
   })
 
   function onkey(e: KeyboardEvent, entry: SftpEntry) {
+    if (e.key === 'Delete' || e.key === 'F2' || (e.key === 'Enter' && e.altKey)) {
+      // I comandi agiscono sulla selezione; se la riga attiva non ne fa parte, si seleziona prima.
+      if (!selection.has(entry.path)) {
+        selection = new Set([entry.path])
+        anchor = entry.path
+      }
+      e.preventDefault()
+      if (e.key === 'Delete') askDelete()
+      else if (e.key === 'F2') askRename()
+      else askProps()
+      return
+    }
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a') {
       e.preventDefault()
       selection = new Set(rows.map((r) => r.path))
@@ -530,10 +627,52 @@
     {#if hasDirs}
       <button role="menuitem" onclick={() => pick(() => downloadSelection('dir'))}>{t('downloadFolders')}</button>
     {/if}
+    {#if menu.entry}<hr />{/if}
     <button role="menuitem" onclick={() => pick(() => pickUpload(false))}>{t('uploadFiles')}</button>
     <button role="menuitem" onclick={() => pick(() => pickUpload(true))}>{t('uploadFolder')}</button>
-    <button role="menuitem" onclick={() => pick(() => connId !== null && cur && go(connId, cur.path, false))}>{t('refresh')}</button>
+    <hr />
+    <button role="menuitem" onclick={() => pick(askMkdir)}>{t('newFolder')}</button>
+    {#if menu.entry}
+      <button role="menuitem" disabled={!single} onclick={() => pick(askRename)}>{t('rename')} <kbd>F2</kbd></button>
+      <button role="menuitem" class="danger-item" onclick={() => pick(askDelete)}>{t('delete')} <kbd>Canc</kbd></button>
+      <hr />
+      <button role="menuitem" onclick={() => pick(copyPaths)}>{t('copyPath')}</button>
+      <button role="menuitem" disabled={!single} onclick={() => pick(askProps)}>{t('properties')} <kbd>Alt+⏎</kbd></button>
+    {/if}
+    <hr />
+    <button role="menuitem" onclick={() => pick(refreshCurrent)}>{t('refresh')}</button>
   </div>
+{/if}
+
+{#if dialog?.type === 'delete'}
+  <DeleteDialog
+    entries={dialog.entries}
+    busy={dialog.busy}
+    failures={dialog.failures}
+    onconfirm={confirmDelete}
+    oncancel={() => (dialog = null)}
+  />
+{:else if dialog?.type === 'rename'}
+  <NameDialog
+    title={t('rename')}
+    label={t('newName')}
+    initial={dialog.entry.name}
+    confirmLabel={t('rename')}
+    error={dialog.error}
+    onconfirm={confirmRename}
+    oncancel={() => (dialog = null)}
+  />
+{:else if dialog?.type === 'mkdir'}
+  <NameDialog
+    title={t('newFolder')}
+    label={t('folderName')}
+    confirmLabel={t('create')}
+    error={dialog.error}
+    onconfirm={confirmMkdir}
+    oncancel={() => (dialog = null)}
+  />
+{:else if dialog?.type === 'props' && connId !== null}
+  <PropertiesDialog entry={dialog.entry} {connId} onclose={() => (dialog = null)} onchanged={refreshCurrent} />
 {/if}
 
 <style>
@@ -690,8 +829,23 @@
     border: none;
     background: transparent;
   }
-  .menu button:hover {
+  .menu button:hover:not(:disabled) {
     background: var(--bg-hover);
+  }
+  .menu hr {
+    border: none;
+    border-top: 1px solid var(--border);
+    margin: 3px 0;
+  }
+  .menu kbd {
+    float: right;
+    margin-left: 18px;
+    color: var(--fg-dim);
+    font-size: 11px;
+    font-family: inherit;
+  }
+  .menu .danger-item {
+    color: var(--danger);
   }
   .notice {
     margin: 0 8px 6px;

@@ -4,6 +4,7 @@
 
 mod entry;
 mod error;
+pub mod ops;
 mod sftp;
 pub mod transfer;
 
@@ -27,6 +28,9 @@ pub trait RemoteFs: Send + Sync {
     fn list(&self, path: &str) -> impl Future<Output = Result<Vec<Entry>>> + Send;
     /// Informazioni su un percorso (segue i link simbolici).
     fn stat(&self, path: &str) -> impl Future<Output = Result<Entry>> + Send;
+    /// Come `stat`, ma **senza seguire** il link simbolico finale: per un link `is_symlink` è vero e
+    /// `kind` è `Other`.
+    fn lstat(&self, path: &str) -> impl Future<Output = Result<Entry>> + Send;
     /// Percorso assoluto e normalizzato; `"."` è la cartella di partenza (di norma la home).
     fn canonicalize(&self, path: &str) -> impl Future<Output = Result<String>> + Send;
 

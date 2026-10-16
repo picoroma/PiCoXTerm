@@ -92,6 +92,16 @@ impl RemoteFs for SftpFs {
         Ok(entry_from(name.to_string(), path.to_string(), &meta, None))
     }
 
+    async fn lstat(&self, path: &str) -> Result<Entry> {
+        let meta = self
+            .session
+            .symlink_metadata(path)
+            .await
+            .map_err(|e| FsError::from_sftp(e, path))?;
+        let name = path.rsplit('/').find(|s| !s.is_empty()).unwrap_or("/");
+        Ok(entry_from(name.to_string(), path.to_string(), &meta, None))
+    }
+
     async fn canonicalize(&self, path: &str) -> Result<String> {
         self.session
             .canonicalize(path)
