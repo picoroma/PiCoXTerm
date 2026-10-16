@@ -16,6 +16,12 @@
     | 'folder-plus'
     | 'plus'
     | 'info'
+    | 'terminal'
+    | 'folder-transfer'
+    | 'swap'
+    | 'cloud'
+    | 'monitor'
+    | 'monitor-cursor'
 
   let { name, size = 16 }: { name: IconName; size?: number } = $props()
 
@@ -23,6 +29,7 @@
     'M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z'
   const TRAY = 'M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4'
   const PADLOCK = 'M5 11h14a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2z'
+  const MONITOR = 'M4 3h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z'
   const EYE = 'M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z'
 
   // Icone a tratto singolo (stile coerente: 24x24, tratto 2, estremità arrotondate).
@@ -49,6 +56,12 @@
     'folder-plus': [FOLDER, 'M12 11v6', 'M9 14h6'],
     plus: ['M12 5v14', 'M5 12h14'],
     info: ['M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20z', 'M12 16v-4', 'M12 8h.01'],
+    terminal: ['M4 17l6-6-6-6', 'M12 19h8'],
+    'folder-transfer': [FOLDER, 'M8 14h8', 'M13 11l3 3-3 3'],
+    swap: ['M7 10h14', 'M17 6l4 4-4 4', 'M17 18H3', 'M7 14l-4 4 4 4'],
+    cloud: ['M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9z'],
+    monitor: [MONITOR, 'M8 21h8', 'M12 17v4'],
+    'monitor-cursor': [MONITOR, 'M8 21h8', 'M12 17v4', 'M9 7l5 3-2.2.7-.9 2.1z'],
   }
 </script>
 

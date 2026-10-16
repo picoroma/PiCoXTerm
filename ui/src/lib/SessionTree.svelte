@@ -194,10 +194,10 @@
     <strong>{t('sessions')}</strong>
     <span class="spacer"></span>
     <button type="button" title={t('newFolder')} aria-label={t('newFolder')} onclick={() => onnewfolder(parentFor(nodes.find((n) => n.id === selected) ?? null))}>
-      📁+
+      <Icon name="folder-plus" />
     </button>
-    <button type="button" title={t('newSession')} aria-label={t('newSession')} onclick={() => onnewsession(parentFor(nodes.find((n) => n.id === selected) ?? null))}>
-      +
+    <button type="button" class="primary new" title={t('newSession')} aria-label={t('newSession')} onclick={() => onnewsession(parentFor(nodes.find((n) => n.id === selected) ?? null))}>
+      <Icon name="plus" /><span>{t('newSession')}</span>
     </button>
   </div>
   <input class="filter" type="search" placeholder={t('filter')} bind:value={filter} aria-label={t('filter')} />
@@ -263,7 +263,7 @@
       <button role="menuitem" onclick={() => pick(() => onrename(target))}>{t('rename')}</button>
     {/if}
     <button role="menuitem" onclick={() => pick(() => onnewsession(parentFor(target)))}>
-      {target?.type === 'folder' ? t('newSessionHere') : t('newSession')}
+      {target?.type === 'folder' ? t('newSessionHere') : t('newSession')}…
     </button>
     <button role="menuitem" onclick={() => pick(() => onnewfolder(parentFor(target)))}>
       {target?.type === 'folder' ? t('newFolderHere') : t('newFolder')}
@@ -294,6 +294,15 @@
     display: inline-flex;
     align-items: center;
     padding: 4px 7px;
+  }
+  .head .new {
+    gap: 5px;
+    min-width: 0;
+  }
+  .head .new span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .filter {
     margin: 0 8px 8px;

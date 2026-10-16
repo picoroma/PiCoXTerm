@@ -7,6 +7,7 @@
   import EditorTab from './lib/EditorTab.svelte'
   import SettingsDialog from './lib/SettingsDialog.svelte'
   import AboutDialog from './lib/AboutDialog.svelte'
+  import NewSessionDialog from './lib/NewSessionDialog.svelte'
   import Icon from './lib/Icon.svelte'
   import SftpPanel from './lib/SftpPanel.svelte'
   import TransferBar from './lib/TransferBar.svelte'
@@ -14,6 +15,7 @@
   import { deleteNode, duplicateSession, listNodes, saveNode } from './lib/api'
   import { invoke } from '@tauri-apps/api/core'
   import { newFolder, newSession, type SftpEntry, type TrackingInfo, type Folder, type Session, type SessionNode, type Target, type Uuid } from './lib/types'
+  import type { Protocol } from './lib/protocols'
   import { t } from './i18n'
 
   interface Tab {
@@ -45,6 +47,8 @@
   let quick = $state('')
   let showSettings = $state(false)
   let showAbout = $state(false)
+  /** Scelta del tipo di sessione da creare; `parentId` è la cartella di destinazione. */
+  let picking = $state<{ parentId: Uuid | null } | null>(null)
 
   let closingEditor = $state<Tab | null>(null)
 
@@ -179,6 +183,13 @@
   }
 
   function startNewSession(parentId: Uuid | null) {
+    picking = { parentId }
+  }
+
+  /** Dopo la scelta del protocollo si apre il modulo specifico (per ora solo SSH). */
+  function pickProtocol(_protocol: Protocol) {
+    const parentId = picking?.parentId ?? null
+    picking = null
     editing = { session: newSession(parentId), isNew: true }
   }
 
@@ -361,6 +372,10 @@
       >
     {/snippet}
   </Modal>
+{/if}
+
+{#if picking}
+  <NewSessionDialog onpick={pickProtocol} onclose={() => (picking = null)} />
 {/if}
 
 {#if showAbout}

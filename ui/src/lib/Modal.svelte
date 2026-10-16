@@ -6,18 +6,21 @@
     onclose,
     children,
     actions,
+    width,
   }: {
     title: string
     onclose?: () => void
     children: Snippet
     actions?: Snippet
+    /** Larghezza della finestra (valore CSS); di norma 520px. */
+    width?: string
   } = $props()
 </script>
 
 <svelte:window onkeydown={(e) => e.key === 'Escape' && onclose?.()} />
 
 <div class="backdrop">
-  <div class="dialog" role="dialog" aria-modal="true" aria-label={title}>
+  <div class="dialog" role="dialog" aria-modal="true" aria-label={title} style:width={width}>
     <h2>{title}</h2>
     {@render children()}
     {#if actions}<div class="actions">{@render actions()}</div>{/if}
