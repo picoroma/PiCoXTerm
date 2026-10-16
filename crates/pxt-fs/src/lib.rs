@@ -49,6 +49,18 @@ pub trait RemoteFs: Send + Sync {
     fn open_read(&self, path: &str) -> impl Future<Output = Result<Self::Reader>> + Send;
     /// Crea (o svuota) un file e lo apre in scrittura.
     fn open_write(&self, path: &str) -> impl Future<Output = Result<Self::Writer>> + Send;
+    /// Apre un file in lettura a partire da `offset` (per riprendere un trasferimento).
+    fn open_read_at(
+        &self,
+        path: &str,
+        offset: u64,
+    ) -> impl Future<Output = Result<Self::Reader>> + Send;
+    /// Apre un file **esistente** in scrittura, senza svuotarlo, posizionandosi su `offset`.
+    fn open_write_at(
+        &self,
+        path: &str,
+        offset: u64,
+    ) -> impl Future<Output = Result<Self::Writer>> + Send;
 
     fn capabilities(&self) -> FsCapabilities;
 }

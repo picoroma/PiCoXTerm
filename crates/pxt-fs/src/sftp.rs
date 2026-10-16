@@ -2,7 +2,8 @@
 
 use russh_sftp::client::fs::Metadata;
 use russh_sftp::client::SftpSession;
-use tokio::io::{AsyncRead, AsyncWrite};
+use russh_sftp::protocol::OpenFlags;
+use tokio::io::{AsyncRead, AsyncSeekExt, AsyncWrite};
 
 use crate::{Entry, EntryKind, FsCapabilities, FsError, RemoteFs, Result};
 
@@ -173,6 +174,26 @@ impl RemoteFs for SftpFs {
             .create(path)
             .await
             .map_err(|e| FsError::from_sftp(e, path))
+    }
+
+    async fn open_read_at(&self, path: &str, offset: u64) -> Result<Self::Reader> {
+        let mut file = self.open_read(path).await?;
+        file.seek(std::io::SeekFrom::Start(offset))
+            .await
+            .map_err(|e| FsError::Sftp(e.to_string()))?;
+        Ok(file)
+    }
+
+    async fn open_write_at(&self, path: &str, offset: u64) -> Result<Self::Writer> {
+        let mut file = self
+            .session
+            .open_with_flags(path, OpenFlags::WRITE)
+            .await
+            .map_err(|e| FsError::from_sftp(e, path))?;
+        file.seek(std::io::SeekFrom::Start(offset))
+            .await
+            .map_err(|e| FsError::Sftp(e.to_string()))?;
+        Ok(file)
     }
 
     fn capabilities(&self) -> FsCapabilities {

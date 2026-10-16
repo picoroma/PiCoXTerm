@@ -59,7 +59,8 @@ const fileTexts: Record<string, { content: string; modified: number; size: numbe
   }
 }
 const plans = new Map<number, any>()
-const jobStates = new Map<number, { cancelled: boolean }>()
+const jobStates = new Map<number, { mode: 'running' | 'paused' | 'cancelled' }>()
+const resumable = new Map<number, { plan: any; policy: string; step: number }>()
 let planSeq = 100
 let jobSeq = 500
 function makePlan(direction: string, fileCount: number, dest: string) {
@@ -78,6 +79,31 @@ let settings: any = {
   rightClickPaste: true,
   pasteMultilineWarning: true,
 }
+/** Trasferimento finto: sei passi, con pausa, ripresa e (se `__failTransfer`) un file fallito. */
+function runMockJob(rec: { plan: any; policy: string; step: number }, onEvent: string): number {
+  const jobId = ++jobSeq
+  const state = { mode: 'running' as 'running' | 'paused' | 'cancelled' }
+  jobStates.set(jobId, state)
+  const total = rec.plan?.totalBytes ?? 1000
+  const tick = () => {
+    if (state.mode === 'cancelled') return emit(onEvent, { type: 'cancelled', jobId })
+    if (state.mode === 'paused') {
+      resumable.set(jobId, rec)
+      return emit(onEvent, { type: 'paused', jobId })
+    }
+    rec.step++
+    if (rec.step > 5) {
+      const failed = (window as any).__failTransfer ? [{ path: '/x/falla.txt', message: 'permesso negato' }] : []
+      if (failed.length) resumable.set(jobId, rec)
+      return emit(onEvent, { type: 'finished', jobId, resumable: failed.length > 0, summary: { filesDone: rec.plan?.fileCount ?? 0, filesSkipped: rec.policy === 'skip' ? rec.plan?.conflicts ?? 0 : 0, bytes: total, failed } })
+    }
+    emit(onEvent, { type: 'progress', jobId, bytesDone: Math.round((total * rec.step) / 6), bytesTotal: total, filesDone: rec.step, filesTotal: rec.plan?.fileCount ?? 0, current: `/tmp/file-${rec.step}.bin`, speedBps: 5_000_000 })
+    setTimeout(tick, 400)
+  }
+  setTimeout(tick, 50)
+  return jobId
+}
+
 const handlers: Record<string, (args: any) => unknown> = {
   settings_get: () => settings,
   session_test: ({ session }) => {
@@ -233,24 +259,26 @@ const handlers: Record<string, (args: any) => unknown> = {
   transfer_start: ({ planId, policy, onEvent }) => {
     ;(window as any).__lastPolicy = policy
     const plan = plans.get(planId)
-    const jobId = ++jobSeq
-    const state = { cancelled: false }
-    jobStates.set(jobId, state)
-    let step = 0
-    const total = plan?.totalBytes ?? 1000
-    const tick = () => {
-      if (state.cancelled) return emit(onEvent, { type: 'cancelled', jobId })
-      step++
-      if (step > 5) return emit(onEvent, { type: 'finished', jobId, summary: { filesDone: plan?.fileCount ?? 0, filesSkipped: policy === 'skip' ? plan?.conflicts ?? 0 : 0, bytes: total, failed: (window as any).__failTransfer ? [{ path: '/x/falla.txt', message: 'permesso negato' }] : [] } })
-      emit(onEvent, { type: 'progress', jobId, bytesDone: Math.round((total * step) / 6), bytesTotal: total, filesDone: step, filesTotal: plan?.fileCount ?? 0, current: `/tmp/file-${step}.bin`, speedBps: 5_000_000 })
-      setTimeout(tick, 150)
-    }
-    setTimeout(tick, 50)
-    return jobId
+    return runMockJob({ plan, policy, step: 0 }, onEvent)
+  },
+  transfer_resume: ({ jobId, onEvent }) => {
+    const rec = resumable.get(jobId)
+    if (!rec) throw 'lavoro non riprendibile (già ripreso o scartato)'
+    resumable.delete(jobId)
+    ;(window as any).__failTransfer = false
+    return runMockJob({ ...rec, step: rec.step }, onEvent)
+  },
+  transfer_pause: ({ jobId }) => {
+    const st = jobStates.get(jobId)
+    if (st) st.mode = 'paused'
   },
   transfer_cancel: ({ jobId }) => {
     const st = jobStates.get(jobId)
-    if (st) st.cancelled = true
+    if (st) st.mode = 'cancelled'
+  },
+  transfer_discard: ({ jobId }) => {
+    ;(window as any).__lastDiscard = jobId
+    return resumable.delete(jobId) ? 1 : 0
   },
 }
 

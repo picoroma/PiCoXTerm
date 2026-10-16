@@ -91,7 +91,7 @@ Attività:
 3. Tracciamento della `cwd`: OSC 7 + iniezione per bash, zsh, ksh, csh/tcsh; rilevamento della shell; pulsante "Re-inietta tracciamento"; icona lucchetto "segui terminale".
 4. Operazioni: elenco, crea cartella, rinomina, elimina, chmod, file nascosti, barra del percorso, preferiti.
 5. Drag & drop da e verso l'Esplora risorse / Finder.
-6. Coda dei trasferimenti: concorrenza, avanzamento, annulla, riprova, gestione dei conflitti, ripresa, streaming.
+6. Coda dei trasferimenti: concorrenza, avanzamento, annulla, riprova, gestione dei conflitti, ripresa, streaming. **Fatto** (D-21): 4 file in parallelo, pausa/ripresa/riprova, parziali verificati.
 7. **Editor integrato** (clic destro, Modifica; D-19) e, in alternativa, "Apri con l'editor di sistema" con ricaricamento al salvataggio.
 
 **Criteri di accettazione:**

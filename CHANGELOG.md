@@ -3,6 +3,15 @@
 All notable changes to PiCoXterm are recorded here, in English.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions are pre-1.0 and may change freely.
 
+## [Unreleased]
+
+### Added
+- Transfers copy up to four files at a time per job (200 small files: 1.6 s → 0.4 s against the test server).
+- Pause and resume for transfers: pausing keeps the partial files, resuming continues from where each file stopped (checked against the original) and skips files already finished. Failed files can be retried. Cancelling still deletes partial files.
+
+### Changed
+- Partial files are named `<name>.<size>-<mtime>.pxt-part` so a partial of a different version of the file is never reused.
+
 ## [0.1.0-beta.1] - 2026-10-16
 
 First test release. Windows only, unsigned (SmartScreen will warn).

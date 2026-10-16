@@ -1,6 +1,6 @@
 <script lang="ts">
   import { t } from '../i18n'
-  import { cancelJob, clearFinished, dismissJob, jobs, type Job } from './transfers.svelte'
+  import { cancelJob, clearFinished, dismissJob, jobs, pauseJob, resumeJob, type Job } from './transfers.svelte'
 
   let collapsed = $state(false)
   const running = $derived(jobs.filter((j) => j.state === 'running').length)
@@ -48,9 +48,15 @@
               <span class="dir">{j.direction === 'upload' ? '⬆' : '⬇'}</span>
               <span class="title" title={j.title}>{j.title}</span>
               {#if j.state === 'running'}
+                <button type="button" onclick={() => pauseJob(j)}>{t('pause')}</button>
                 <button type="button" onclick={() => cancelJob(j)}>{t('cancel')}</button>
               {:else}
-                <button type="button" aria-label={t('dismiss')} title={t('dismiss')} onclick={() => dismissJob(j)}>✕</button>
+                {#if j.state === 'paused'}
+                  <button type="button" class="primary" onclick={() => resumeJob(j)}>{t('resume')}</button>
+                {:else if j.state === 'done' && j.resumable}
+                  <button type="button" onclick={() => resumeJob(j)}>{t('retryFailed')}</button>
+                {/if}
+                <button type="button" aria-label={t('dismiss')} title={j.state === 'paused' ? t('discardPartials') : t('dismiss')} onclick={() => dismissJob(j)}>✕</button>
               {/if}
             </div>
             <div class="track" role="progressbar" aria-valuenow={Math.round(percent(j))} aria-valuemin="0" aria-valuemax="100">
@@ -66,6 +72,12 @@
               {:else if j.state === 'done'}
                 <span>{j.failed.length === 0 ? '✓ ' + t('done') : '⚠ ' + t('doneWithErrors', { n: j.failed.length })}</span>
                 {#if j.skipped > 0}<span>{t('skipped', { n: j.skipped })}</span>{/if}
+                {#if j.message}<span class="err">{j.message}</span>{/if}
+              {:else if j.state === 'paused'}
+                <span>{t('paused')}</span>
+                <span>{size(j.bytesDone)} / {size(j.bytesTotal)}</span>
+                <span>{j.filesDone}/{j.filesTotal} {t('files')}</span>
+                {#if j.message}<span class="err">{j.message}</span>{/if}
               {:else if j.state === 'cancelled'}
                 <span>{t('cancelled')}</span>
               {:else}
@@ -149,6 +161,9 @@
   }
   .job.done .fill {
     background: #5cb85c;
+  }
+  .job.paused .fill {
+    background: #e5a000;
   }
   .job.cancelled .fill,
   .job.failed .fill {

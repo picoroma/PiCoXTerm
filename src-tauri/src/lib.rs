@@ -40,8 +40,10 @@ struct AppState {
     sftp: tokio::sync::Mutex<HashMap<u64, Arc<SftpFs>>>,
     /// Piani di trasferimento in attesa di conferma (una scelta sui conflitti) o di avvio.
     plans: Mutex<HashMap<u64, StoredPlan>>,
-    /// Trasferimenti in corso: segnale di annullamento di ciascuno.
-    jobs: Mutex<HashMap<u64, Arc<AtomicBool>>>,
+    /// Trasferimenti in corso: segnale di controllo (pausa, annullamento) di ciascuno.
+    jobs: Mutex<HashMap<u64, Arc<fs_transfer::Control>>>,
+    /// Lavori che si possono riprendere (in pausa, o conclusi con errori su alcuni file).
+    resumable: Mutex<HashMap<u64, JobRecord>>,
     /// Destinazione di ogni connessione, per l'audit dei trasferimenti.
     conn_ctx: Mutex<HashMap<u64, AuditCtx>>,
     pending_hostkeys: Mutex<HashMap<u64, oneshot::Sender<HostKeyDecision>>>,
@@ -61,6 +63,7 @@ impl AppState {
             sftp: tokio::sync::Mutex::default(),
             plans: Mutex::default(),
             jobs: Mutex::default(),
+            resumable: Mutex::default(),
             conn_ctx: Mutex::default(),
             pending_hostkeys: Mutex::default(),
             next_id: AtomicU64::new(0),
@@ -1190,15 +1193,155 @@ enum TransferEvent {
         current: String,
         speed_bps: f64,
     },
+    /// Concluso. `resumable`: ci sono file falliti che si possono riprovare.
     #[serde(rename_all = "camelCase")]
     Finished {
         job_id: u64,
         summary: fs_transfer::Summary,
+        resumable: bool,
     },
+    /// In pausa: i file parziali restano sul disco o sul server e si può riprendere.
+    #[serde(rename_all = "camelCase")]
+    Paused { job_id: u64 },
     #[serde(rename_all = "camelCase")]
     Cancelled { job_id: u64 },
     #[serde(rename_all = "camelCase")]
     Failed { job_id: u64, message: String },
+}
+
+/// File copiati contemporaneamente in ogni lavoro.
+const TRANSFER_CONCURRENCY: usize = fs_transfer::DEFAULT_CONCURRENCY;
+
+/// Un lavoro che si può riprendere: in pausa, oppure concluso con errori su alcuni file.
+struct JobRecord {
+    conn: u64,
+    plan: Arc<fs_transfer::Plan>,
+    policy: ConflictPolicy,
+    state: Arc<fs_transfer::JobState>,
+}
+
+/// Avvia (o riavvia) l'esecuzione di un lavoro e restituisce il suo id.
+fn launch(
+    state: &Arc<AppState>,
+    fs: Arc<SftpFs>,
+    record: JobRecord,
+    on_event: Channel<TransferEvent>,
+) -> u64 {
+    let job_id = state.next_id();
+    let control = Arc::new(fs_transfer::Control::new());
+    state
+        .jobs
+        .lock()
+        .unwrap()
+        .insert(job_id, Arc::clone(&control));
+
+    let state = Arc::clone(state);
+    tauri::async_runtime::spawn(async move {
+        // Velocità media mobile sugli ultimi aggiornamenti. Il primo rilevamento fissa solo il
+        // punto di partenza: in una ripresa i byte già fatti non contano come velocità.
+        let mut last: Option<(std::time::Instant, u64)> = None;
+        let mut speed = 0.0_f64;
+        let mut report = |p: &Progress| {
+            let now = std::time::Instant::now();
+            match last {
+                None => last = Some((now, p.bytes_done)),
+                Some((t, b)) => {
+                    let dt = now.duration_since(t).as_secs_f64();
+                    if dt >= 0.2 {
+                        let inst = (p.bytes_done.saturating_sub(b)) as f64 / dt;
+                        speed = if speed == 0.0 {
+                            inst
+                        } else {
+                            0.7 * speed + 0.3 * inst
+                        };
+                        last = Some((now, p.bytes_done));
+                    }
+                }
+            }
+            let _ = on_event.send(TransferEvent::Progress {
+                job_id,
+                bytes_done: p.bytes_done,
+                bytes_total: p.bytes_total,
+                files_done: p.files_done,
+                files_total: p.files_total,
+                current: p.current.clone(),
+                speed_bps: speed,
+            });
+        };
+        let result = fs_transfer::run(
+            &*fs,
+            &record.plan,
+            record.policy,
+            &control,
+            &record.state,
+            TRANSFER_CONCURRENCY,
+            &mut report,
+        )
+        .await;
+
+        let direction = record.plan.direction;
+        let event_name = match direction {
+            fs_transfer::Direction::Upload => "transfer_upload",
+            fs_transfer::Direction::Download => "transfer_download",
+        };
+        let conn = record.conn;
+        let ctx = state.conn_ctx.lock().unwrap().get(&conn).cloned();
+        let (event, audit_outcome, detail) = match result {
+            Ok(summary) => {
+                let ok = summary.failed.is_empty();
+                let detail = format!(
+                    "{} file, {} byte, {} saltati, {} errori",
+                    summary.files_done,
+                    summary.bytes,
+                    summary.files_skipped,
+                    summary.failed.len()
+                );
+                if !ok {
+                    state.resumable.lock().unwrap().insert(job_id, record);
+                }
+                (
+                    TransferEvent::Finished {
+                        job_id,
+                        summary,
+                        resumable: !ok,
+                    },
+                    if ok { Outcome::Ok } else { Outcome::Failed },
+                    detail,
+                )
+            }
+            Err(fs_transfer::TransferError::Paused) => {
+                state.resumable.lock().unwrap().insert(job_id, record);
+                (
+                    TransferEvent::Paused { job_id },
+                    Outcome::Ok,
+                    "in pausa".to_string(),
+                )
+            }
+            Err(fs_transfer::TransferError::Cancelled) => {
+                // Un annullamento non lascia nulla: anche i parziali di una pausa precedente.
+                fs_transfer::discard_partials(&*fs, direction, &record.state).await;
+                (
+                    TransferEvent::Cancelled { job_id },
+                    Outcome::Failed,
+                    "annullato".to_string(),
+                )
+            }
+            Err(e) => (
+                TransferEvent::Failed {
+                    job_id,
+                    message: e.to_string(),
+                },
+                Outcome::Failed,
+                e.to_string(),
+            ),
+        };
+        if let Some(ctx) = ctx {
+            state.audit(&ctx, event_name, audit_outcome, Some(detail));
+        }
+        state.jobs.lock().unwrap().remove(&job_id);
+        let _ = on_event.send(event);
+    });
+    job_id
 }
 
 /// Avvia un piano già calcolato con la politica scelta per i conflitti. Restituisce l'id del lavoro.
@@ -1216,95 +1359,80 @@ async fn transfer_start(
         .remove(&plan_id)
         .ok_or("piano non trovato (scaduto o già avviato)")?;
     let fs = sftp_for(&state, stored.conn).await?;
-    let job_id = state.next_id();
-    let cancel = Arc::new(AtomicBool::new(false));
-    state
-        .jobs
+    let job_state = Arc::new(fs_transfer::JobState::new(&stored.plan));
+    let record = JobRecord {
+        conn: stored.conn,
+        plan: Arc::new(stored.plan),
+        policy,
+        state: job_state,
+    };
+    Ok(launch(&state, fs, record, on_event))
+}
+
+/// Riprende un lavoro in pausa o riprova i file falliti di uno concluso con errori: i file già
+/// finiti si saltano e i parziali validi continuano dal punto raggiunto. Restituisce il nuovo id.
+#[tauri::command]
+async fn transfer_resume(
+    state: Shared<'_>,
+    job_id: u64,
+    on_event: Channel<TransferEvent>,
+) -> Result<u64, String> {
+    let record = state
+        .resumable
         .lock()
         .unwrap()
-        .insert(job_id, Arc::clone(&cancel));
-
-    let state = Arc::clone(&state);
-    tauri::async_runtime::spawn(async move {
-        let plan = stored.plan;
-        let started = std::time::Instant::now();
-        // Velocità media mobile sugli ultimi aggiornamenti.
-        let mut last = (started, 0u64);
-        let mut speed = 0.0_f64;
-        let mut report = |p: &Progress| {
-            let now = std::time::Instant::now();
-            let dt = now.duration_since(last.0).as_secs_f64();
-            if dt >= 0.2 {
-                let inst = (p.bytes_done.saturating_sub(last.1)) as f64 / dt;
-                speed = if speed == 0.0 {
-                    inst
-                } else {
-                    0.7 * speed + 0.3 * inst
-                };
-                last = (now, p.bytes_done);
-            }
-            let _ = on_event.send(TransferEvent::Progress {
-                job_id,
-                bytes_done: p.bytes_done,
-                bytes_total: p.bytes_total,
-                files_done: p.files_done,
-                files_total: p.files_total,
-                current: p.current.clone(),
-                speed_bps: speed,
-            });
-        };
-        let result = fs_transfer::run(&*fs, &plan, policy, &cancel, &mut report).await;
-
-        let event_name = match plan.direction {
-            fs_transfer::Direction::Upload => "transfer_upload",
-            fs_transfer::Direction::Download => "transfer_download",
-        };
-        let ctx = state.conn_ctx.lock().unwrap().get(&stored.conn).cloned();
-        let (event, audit_outcome, detail) = match result {
-            Ok(summary) => {
-                let ok = summary.failed.is_empty();
-                let detail = format!(
-                    "{} file, {} byte, {} saltati, {} errori",
-                    summary.files_done,
-                    summary.bytes,
-                    summary.files_skipped,
-                    summary.failed.len()
-                );
-                (
-                    TransferEvent::Finished { job_id, summary },
-                    if ok { Outcome::Ok } else { Outcome::Failed },
-                    detail,
-                )
-            }
-            Err(fs_transfer::TransferError::Cancelled) => (
-                TransferEvent::Cancelled { job_id },
-                Outcome::Failed,
-                "annullato".to_string(),
-            ),
-            Err(e) => (
-                TransferEvent::Failed {
-                    job_id,
-                    message: e.to_string(),
-                },
-                Outcome::Failed,
-                e.to_string(),
-            ),
-        };
-        if let Some(ctx) = ctx {
-            state.audit(&ctx, event_name, audit_outcome, Some(detail));
+        .remove(&job_id)
+        .ok_or("lavoro non riprendibile (già ripreso o scartato)")?;
+    match sftp_for(&state, record.conn).await {
+        Ok(fs) => Ok(launch(&state, fs, record, on_event)),
+        Err(e) => {
+            // La connessione non c'è più: il lavoro resta riprendibile finché non si scarta.
+            state.resumable.lock().unwrap().insert(job_id, record);
+            Err(e)
         }
-        state.jobs.lock().unwrap().remove(&job_id);
-        let _ = on_event.send(event);
-    });
-    Ok(job_id)
+    }
+}
+
+/// Mette in pausa un trasferimento: si ferma entro pochi istanti e tiene i file parziali.
+#[tauri::command]
+fn transfer_pause(state: Shared<'_>, job_id: u64) {
+    if let Some(control) = state.jobs.lock().unwrap().get(&job_id) {
+        control.pause();
+    }
 }
 
 /// Annulla un trasferimento in corso: si ferma entro pochi istanti e non lascia file parziali.
 #[tauri::command]
 fn transfer_cancel(state: Shared<'_>, job_id: u64) {
-    if let Some(flag) = state.jobs.lock().unwrap().get(&job_id) {
-        flag.store(true, Ordering::Relaxed);
+    if let Some(control) = state.jobs.lock().unwrap().get(&job_id) {
+        control.cancel();
     }
+}
+
+/// Abbandona un lavoro riprendibile ed elimina i file parziali che ha lasciato. Restituisce quanti.
+#[tauri::command]
+async fn transfer_discard(state: Shared<'_>, job_id: u64) -> Result<usize, String> {
+    let Some(record) = state.resumable.lock().unwrap().remove(&job_id) else {
+        return Ok(0);
+    };
+    let paths = record.state.take_partials();
+    let mut removed = 0;
+    match record.plan.direction {
+        fs_transfer::Direction::Download => {
+            for p in paths {
+                removed += usize::from(std::fs::remove_file(p).is_ok());
+            }
+        }
+        fs_transfer::Direction::Upload => {
+            // Sul server si può togliere solo se la connessione è ancora aperta.
+            if let Ok(fs) = sftp_for(&state, record.conn).await {
+                for p in paths {
+                    removed += usize::from(fs.remove_file(&p).await.is_ok());
+                }
+            }
+        }
+    }
+    Ok(removed)
 }
 
 #[tauri::command]
@@ -1433,6 +1561,9 @@ pub fn run() {
             transfer_plan_download,
             transfer_plan_discard,
             transfer_start,
+            transfer_resume,
+            transfer_pause,
+            transfer_discard,
             transfer_cancel,
             ssh_inject_cwd,
             ssh_enable_cwd_tracking,

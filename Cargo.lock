@@ -3724,6 +3724,7 @@ dependencies = [
 name = "pxt-fs"
 version = "0.1.0-beta.1"
 dependencies = [
+ "futures-util",
  "pxt-ssh",
  "russh-sftp",
  "serde",

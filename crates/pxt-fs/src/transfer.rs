@@ -3,14 +3,19 @@
 //! Funzionamento in due tempi: `plan_upload` / `plan_download` costruiscono il piano (cosa si copia,
 //! quali destinazioni esistono già) senza toccare nulla; `run` lo esegue con una politica unica per
 //! i conflitti ("applica a tutti"). I dati passano a blocchi da `CHUNK` byte: mai un file intero in
-//! memoria. Ogni file viene scritto in un file temporaneo e rinominato solo a copia completata.
+//! memoria. Ogni file viene scritto in un file parziale (`part_path`) e rinominato solo a copia
+//! completata. Si copiano più file insieme; un lavoro si può mettere in pausa e riprendere, e un
+//! parziale valido riparte dal punto raggiunto.
 
+use std::collections::HashSet;
+use std::io::SeekFrom;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, AtomicUsize, Ordering};
+use std::sync::Mutex;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeekExt, AsyncWrite, AsyncWriteExt};
 
 use crate::{EntryKind, FsError, RemoteFs};
 
@@ -111,6 +116,8 @@ pub struct Summary {
 pub enum TransferError {
     #[error("trasferimento annullato")]
     Cancelled,
+    #[error("trasferimento in pausa")]
+    Paused,
     #[error(transparent)]
     Fs(#[from] FsError),
     #[error("errore locale: {0}")]
@@ -300,99 +307,327 @@ fn entry_name(path: &str) -> String {
         .to_string()
 }
 
+// ---- Controllo, stato e avanzamento ----
+
+const RUNNING: u8 = 0;
+const PAUSED: u8 = 1;
+const CANCELLED: u8 = 2;
+
+/// Segnale di controllo di un trasferimento in corso.
+#[derive(Debug, Default)]
+pub struct Control(AtomicU8);
+
+impl Control {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Ferma il trasferimento **tenendo** i file parziali: si potrà riprendere da dove era arrivato.
+    pub fn pause(&self) {
+        let _ = self
+            .0
+            .compare_exchange(RUNNING, PAUSED, Ordering::Relaxed, Ordering::Relaxed);
+    }
+
+    /// Ferma il trasferimento ed elimina il file parziale in corso.
+    pub fn cancel(&self) {
+        self.0.store(CANCELLED, Ordering::Relaxed);
+    }
+
+    /// Il motivo per cui ci si deve fermare, se c'è.
+    fn stop(&self) -> Option<TransferError> {
+        match self.0.load(Ordering::Relaxed) {
+            PAUSED => Some(TransferError::Paused),
+            CANCELLED => Some(TransferError::Cancelled),
+            _ => None,
+        }
+    }
+}
+
+/// Attende finché viene chiesto di fermarsi e restituisce il motivo.
+async fn stopped(control: &Control) -> TransferError {
+    loop {
+        if let Some(e) = control.stop() {
+            return e;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+/// Stato di un lavoro che sopravvive a una pausa o a un fallimento parziale: quali voci del piano
+/// sono già concluse e quali file parziali ha lasciato. Serve a riprendere senza rifare nulla.
+#[derive(Debug)]
+pub struct JobState {
+    done: Vec<AtomicBool>,
+    partials: Mutex<HashSet<String>>,
+}
+
+impl JobState {
+    pub fn new(plan: &Plan) -> Self {
+        JobState {
+            done: plan.items.iter().map(|_| AtomicBool::new(false)).collect(),
+            partials: Mutex::default(),
+        }
+    }
+
+    fn is_done(&self, i: usize) -> bool {
+        self.done[i].load(Ordering::Relaxed)
+    }
+
+    fn mark_done(&self, i: usize) {
+        self.done[i].store(true, Ordering::Relaxed);
+    }
+
+    fn add_partial(&self, path: &str) {
+        self.partials.lock().unwrap().insert(path.to_string());
+    }
+
+    /// Toglie e restituisce i parziali registrati (per eliminarli).
+    pub fn take_partials(&self) -> Vec<String> {
+        self.partials.lock().unwrap().drain().collect()
+    }
+
+    fn remove_partial(&self, path: &str) {
+        self.partials.lock().unwrap().remove(path);
+    }
+
+    /// Voci del piano non ancora concluse (da rifare in una ripresa).
+    pub fn remaining(&self) -> usize {
+        self.done
+            .iter()
+            .filter(|d| !d.load(Ordering::Relaxed))
+            .count()
+    }
+}
+
+/// Avanzamento condiviso fra i file che si copiano insieme.
+struct Shared<'a> {
+    bytes_done: AtomicU64,
+    files_done: AtomicUsize,
+    bytes_total: u64,
+    files_total: usize,
+    current: Mutex<String>,
+    last_report: Mutex<Instant>,
+    on_progress: Mutex<&'a mut (dyn FnMut(&Progress) + Send)>,
+}
+
+impl Shared<'_> {
+    fn snapshot(&self) -> Progress {
+        Progress {
+            bytes_done: self.bytes_done.load(Ordering::Relaxed),
+            bytes_total: self.bytes_total,
+            files_done: self.files_done.load(Ordering::Relaxed),
+            files_total: self.files_total,
+            current: self.current.lock().unwrap().clone(),
+        }
+    }
+
+    /// Segnala l'avanzamento al massimo ogni ~100 ms, o subito se `force`.
+    fn report(&self, force: bool) {
+        {
+            let mut last = self.last_report.lock().unwrap();
+            if !force && last.elapsed() < Duration::from_millis(100) {
+                return;
+            }
+            *last = Instant::now();
+        }
+        let p = self.snapshot();
+        (self.on_progress.lock().unwrap())(&p);
+    }
+
+    fn add_bytes(&self, n: u64) {
+        self.bytes_done.fetch_add(n, Ordering::Relaxed);
+        self.report(false);
+    }
+
+    fn file_finished(&self) {
+        self.files_done.fetch_add(1, Ordering::Relaxed);
+        self.report(false);
+    }
+}
+
 // ---- Esecuzione ----
 
-/// Esegue il piano. Gli errori su singoli file non fermano il lotto: finiscono in `Summary::failed`.
-/// L'annullamento (`cancel`) ferma tutto, elimina il file temporaneo in corso e restituisce `Cancelled`.
+/// File copiati contemporaneamente in un lavoro, se chi chiama non ne sceglie un altro numero.
+pub const DEFAULT_CONCURRENCY: usize = 4;
+const MAX_CONCURRENCY: usize = 16;
+/// Quanti byte finali di un file parziale si confrontano con l'originale prima di riprendere.
+const TAIL_CHECK: u64 = 64 * 1024;
+
+/// Nome del file parziale: lega il parziale all'impronta dell'originale (dimensione e data), così
+/// un parziale lasciato da una versione precedente del file non viene mai riutilizzato per sbaglio.
+pub fn part_path(target: &str, item: &PlanItem) -> String {
+    format!(
+        "{target}.{}-{}{PART_SUFFIX}",
+        item.size,
+        item.modified.unwrap_or(0)
+    )
+}
+
+/// Esegue il piano. Gli errori su singoli file non fermano il lotto: finiscono in `Summary::failed`
+/// (e quei file restano "da fare" per una ripresa). Si copiano fino a `concurrency` file insieme.
+///
+/// `control` ferma il lavoro: con `pause` i file parziali restano e `run` restituisce `Paused`; con
+/// `cancel` vengono eliminati e restituisce `Cancelled`. Richiamando `run` con lo stesso `state`
+/// si riprende: le voci già concluse si saltano e i parziali validi continuano dal punto raggiunto.
 pub async fn run<F: RemoteFs>(
     fs: &F,
     plan: &Plan,
     policy: ConflictPolicy,
-    cancel: &AtomicBool,
+    control: &Control,
+    state: &JobState,
+    concurrency: usize,
     on_progress: &mut (dyn FnMut(&Progress) + Send),
 ) -> Result<Summary> {
-    let mut progress = Progress {
-        bytes_total: plan.total_bytes,
-        files_total: plan.file_count,
-        ..Progress::default()
-    };
-    let mut summary = Summary::default();
-    let mut last_report = Instant::now();
-
-    for item in &plan.items {
-        if cancel.load(Ordering::Relaxed) {
-            return Err(TransferError::Cancelled);
-        }
-        match item.kind {
-            ItemKind::Dir => {
-                if let Err(e) = make_dir(fs, plan.direction, &item.dst).await {
-                    summary.failed.push(Failure {
-                        path: item.dst.clone(),
-                        message: e.to_string(),
-                    });
-                }
-            }
-            ItemKind::File => {
-                progress.current = item.src.clone();
-                let target = match resolve(fs, plan.direction, item, policy).await {
-                    Ok(Some(t)) => t,
-                    Ok(None) => {
-                        summary.files_skipped += 1;
-                        progress.bytes_done += item.size;
-                        progress.files_done += 1;
-                        continue;
-                    }
-                    Err(e) => {
-                        summary.failed.push(Failure {
-                            path: item.src.clone(),
-                            message: e.to_string(),
-                        });
-                        continue;
-                    }
-                };
-                let outcome = match plan.direction {
-                    Direction::Upload => {
-                        upload_file(
-                            fs,
-                            item,
-                            &target,
-                            cancel,
-                            &mut progress,
-                            &mut last_report,
-                            on_progress,
-                        )
-                        .await
-                    }
-                    Direction::Download => {
-                        download_file(
-                            fs,
-                            item,
-                            &target,
-                            cancel,
-                            &mut progress,
-                            &mut last_report,
-                            on_progress,
-                        )
-                        .await
-                    }
-                };
-                match outcome {
-                    Ok(()) => {
-                        summary.files_done += 1;
-                        summary.bytes += item.size;
-                        progress.files_done += 1;
-                    }
-                    Err(TransferError::Cancelled) => return Err(TransferError::Cancelled),
-                    Err(e) => summary.failed.push(Failure {
-                        path: item.src.clone(),
-                        message: e.to_string(),
-                    }),
-                }
-            }
+    // Quanto è già fatto da un'esecuzione precedente.
+    let (mut bytes, mut files) = (0u64, 0usize);
+    for (i, item) in plan.items.iter().enumerate() {
+        if item.kind == ItemKind::File && state.is_done(i) {
+            bytes += item.size;
+            files += 1;
         }
     }
-    on_progress(&progress);
-    Ok(summary)
+    let shared = Shared {
+        bytes_done: AtomicU64::new(bytes),
+        files_done: AtomicUsize::new(files),
+        bytes_total: plan.total_bytes,
+        files_total: plan.file_count,
+        current: Mutex::default(),
+        last_report: Mutex::new(Instant::now()),
+        on_progress: Mutex::new(on_progress),
+    };
+    let ctx = Ctx {
+        fs,
+        plan,
+        policy,
+        control,
+        state,
+        shared: &shared,
+        summary: Mutex::new(Summary::default()),
+        todo: plan
+            .items
+            .iter()
+            .enumerate()
+            .filter(|(i, item)| item.kind == ItemKind::File && !state.is_done(*i))
+            .map(|(i, _)| i)
+            .collect(),
+        next: AtomicUsize::new(0),
+    };
+
+    // Prima le cartelle (in ordine, perché una contiene l'altra), poi i file in parallelo.
+    for (i, item) in plan.items.iter().enumerate() {
+        if item.kind != ItemKind::Dir || state.is_done(i) {
+            continue;
+        }
+        if let Some(e) = control.stop() {
+            return Err(e);
+        }
+        match make_dir(fs, plan.direction, &item.dst).await {
+            Ok(()) => state.mark_done(i),
+            Err(e) => ctx.fail(&item.dst, &e),
+        }
+    }
+
+    let workers = concurrency
+        .clamp(1, MAX_CONCURRENCY)
+        .min(ctx.todo.len().max(1));
+    futures_util::future::join_all((0..workers).map(|_| worker_loop(&ctx))).await;
+
+    if let Some(e) = control.stop() {
+        return Err(e);
+    }
+    shared.report(true);
+    Ok(ctx.summary.into_inner().unwrap())
+}
+
+/// Tutto ciò che serve ai lavoratori che copiano i file in parallelo.
+struct Ctx<'a, F> {
+    fs: &'a F,
+    plan: &'a Plan,
+    policy: ConflictPolicy,
+    control: &'a Control,
+    state: &'a JobState,
+    shared: &'a Shared<'a>,
+    summary: Mutex<Summary>,
+    /// Indici dei file da copiare, nell'ordine del piano.
+    todo: Vec<usize>,
+    next: AtomicUsize,
+}
+
+impl<F> Ctx<'_, F> {
+    fn fail(&self, path: &str, e: &dyn ToString) {
+        self.summary.lock().unwrap().failed.push(Failure {
+            path: path.to_string(),
+            message: e.to_string(),
+        });
+    }
+}
+
+/// Un lavoratore: prende il prossimo file da copiare finché ce ne sono o finché non si deve fermare.
+async fn worker_loop<F: RemoteFs>(ctx: &Ctx<'_, F>) {
+    loop {
+        if ctx.control.stop().is_some() {
+            return;
+        }
+        let Some(&idx) = ctx.todo.get(ctx.next.fetch_add(1, Ordering::Relaxed)) else {
+            return;
+        };
+        let item = &ctx.plan.items[idx];
+        *ctx.shared.current.lock().unwrap() = item.src.clone();
+        let target = match resolve(ctx.fs, ctx.plan.direction, item, ctx.policy).await {
+            Ok(Some(t)) => t,
+            Ok(None) => {
+                ctx.summary.lock().unwrap().files_skipped += 1;
+                ctx.shared.add_bytes(item.size);
+                ctx.shared.file_finished();
+                ctx.state.mark_done(idx);
+                continue;
+            }
+            Err(e) => {
+                ctx.fail(&item.src, &e);
+                continue;
+            }
+        };
+        let outcome = match ctx.plan.direction {
+            Direction::Upload => {
+                upload_file(ctx.fs, item, &target, ctx.control, ctx.shared, ctx.state).await
+            }
+            Direction::Download => {
+                download_file(ctx.fs, item, &target, ctx.control, ctx.shared, ctx.state).await
+            }
+        };
+        match outcome {
+            Ok(()) => {
+                {
+                    let mut s = ctx.summary.lock().unwrap();
+                    s.files_done += 1;
+                    s.bytes += item.size;
+                }
+                ctx.shared.file_finished();
+                ctx.state.mark_done(idx);
+            }
+            Err(TransferError::Cancelled | TransferError::Paused) => return,
+            Err(e) => ctx.fail(&item.src, &e),
+        }
+    }
+}
+
+/// Elimina i file parziali lasciati da un lavoro in pausa (azione "scarta"). Restituisce quanti.
+pub async fn discard_partials<F: RemoteFs>(
+    fs: &F,
+    direction: Direction,
+    state: &JobState,
+) -> usize {
+    let paths = state.take_partials();
+    let mut removed = 0;
+    for p in paths {
+        let ok = match direction {
+            Direction::Upload => fs.remove_file(&p).await.is_ok(),
+            Direction::Download => std::fs::remove_file(&p).is_ok(),
+        };
+        removed += usize::from(ok);
+    }
+    removed
 }
 
 async fn make_dir<F: RemoteFs>(fs: &F, direction: Direction, dst: &str) -> Result<()> {
@@ -457,42 +692,81 @@ async fn resolve<F: RemoteFs>(
     }
 }
 
+/// I byte finali (fino a `TAIL_CHECK`) di `len` byte già copiati combaciano con l'originale?
+fn tail_len(len: u64) -> usize {
+    len.min(TAIL_CHECK) as usize
+}
+
 async fn upload_file<F: RemoteFs>(
     fs: &F,
     item: &PlanItem,
     target: &str,
-    cancel: &AtomicBool,
-    progress: &mut Progress,
-    last_report: &mut Instant,
-    on_progress: &mut (dyn FnMut(&Progress) + Send),
+    control: &Control,
+    shared: &Shared<'_>,
+    state: &JobState,
 ) -> Result<()> {
-    let tmp = format!("{target}{PART_SUFFIX}");
+    let part = part_path(target, item);
     let mut src = tokio::fs::File::open(&item.src).await?;
-    let mut writer = fs.open_write(&tmp).await?;
-    let copied = pump(
-        &mut src,
-        &mut writer,
-        cancel,
-        progress,
-        last_report,
-        on_progress,
-    )
-    .await;
+    let src_len = src.metadata().await?.len();
+
+    // Parziale valido? Stessa impronta (è nel nome) e gli ultimi byte combaciano con l'originale.
+    let resume_at = match fs.stat(&part).await {
+        Ok(e) if e.kind == EntryKind::File && e.size > 0 && e.size <= src_len => {
+            let n = tail_len(e.size);
+            let mut local = vec![0u8; n];
+            src.seek(SeekFrom::Start(e.size - n as u64)).await?;
+            src.read_exact(&mut local).await?;
+            let mut remote = vec![0u8; n];
+            let mut r = fs.open_read_at(&part, e.size - n as u64).await?;
+            let same = r.read_exact(&mut remote).await.is_ok() && remote == local;
+            same.then_some(e.size)
+        }
+        _ => None,
+    };
+    state.add_partial(&part);
+    let mut writer = match resume_at {
+        Some(off) => {
+            src.seek(SeekFrom::Start(off)).await?;
+            shared.add_bytes(off);
+            fs.open_write_at(&part, off).await?
+        }
+        None => fs.open_write(&part).await?,
+    };
+    let copied = pump(&mut src, &mut writer, control, shared).await;
     let finished = match copied {
         Ok(()) => writer.shutdown().await.map_err(TransferError::from),
+        Err(TransferError::Paused) => {
+            // Si lascia sul server tutto ciò che è stato inviato, per poter riprendere.
+            let _ = writer.flush().await;
+            Err(TransferError::Paused)
+        }
         Err(e) => Err(e),
     };
     drop(writer);
-    if let Err(e) = finished {
-        let _ = fs.remove_file(&tmp).await;
-        return Err(e);
+    match finished {
+        Ok(()) => {}
+        Err(TransferError::Cancelled) => {
+            let _ = fs.remove_file(&part).await;
+            state.remove_partial(&part);
+            return Err(TransferError::Cancelled);
+        }
+        // Pausa o errore: il parziale resta e verrà verificato alla ripresa.
+        Err(e) => return Err(e),
+    }
+    let sent = fs.stat(&part).await?.size;
+    if sent != src_len {
+        let _ = fs.remove_file(&part).await;
+        state.remove_partial(&part);
+        return Err(TransferError::Io(format!(
+            "dimensione inattesa dopo l'invio ({sent} su {src_len} byte): il file è cambiato?"
+        )));
     }
     // Il rename non sovrascrive: se la destinazione esiste (politica "sovrascrivi") va tolta.
     let _ = fs.remove_file(target).await;
-    if let Err(e) = fs.rename(&tmp, target).await {
-        let _ = fs.remove_file(&tmp).await;
+    if let Err(e) = fs.rename(&part, target).await {
         return Err(e.into());
     }
+    state.remove_partial(&part);
     if let Some(mode) = item.mode {
         let _ = fs.set_permissions(target, mode).await;
     }
@@ -506,39 +780,86 @@ async fn download_file<F: RemoteFs>(
     fs: &F,
     item: &PlanItem,
     target: &str,
-    cancel: &AtomicBool,
-    progress: &mut Progress,
-    last_report: &mut Instant,
-    on_progress: &mut (dyn FnMut(&Progress) + Send),
+    control: &Control,
+    shared: &Shared<'_>,
+    state: &JobState,
 ) -> Result<()> {
-    let tmp = format!("{target}{PART_SUFFIX}");
+    let part = part_path(target, item);
     if let Some(parent) = Path::new(target).parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let mut reader = fs.open_read(&item.src).await?;
-    let mut file = tokio::fs::File::create(&tmp).await?;
-    let copied = pump(
-        &mut reader,
-        &mut file,
-        cancel,
-        progress,
-        last_report,
-        on_progress,
-    )
-    .await;
+
+    // Parziale valido? Stessa impronta (è nel nome) e gli ultimi byte combaciano con l'originale.
+    let existing = std::fs::metadata(&part)
+        .ok()
+        .filter(|m| m.is_file() && m.len() > 0 && m.len() <= item.size)
+        .map(|m| m.len());
+    let mut resume_at = None;
+    let mut reader = None;
+    if let Some(len) = existing {
+        let n = tail_len(len);
+        let mut local = vec![0u8; n];
+        {
+            let mut f = tokio::fs::File::open(&part).await?;
+            f.seek(SeekFrom::Start(len - n as u64)).await?;
+            f.read_exact(&mut local).await?;
+        }
+        let mut r = fs.open_read_at(&item.src, len - n as u64).await?;
+        let mut remote = vec![0u8; n];
+        if r.read_exact(&mut remote).await.is_ok() && remote == local {
+            resume_at = Some(len);
+            reader = Some(r); // già posizionato su `len`
+        }
+    }
+    state.add_partial(&part);
+    let (mut reader, mut file) = match (reader, resume_at) {
+        (Some(r), Some(off)) => {
+            let mut f = tokio::fs::OpenOptions::new()
+                .write(true)
+                .open(&part)
+                .await?;
+            f.seek(SeekFrom::Start(off)).await?;
+            shared.add_bytes(off);
+            (r, f)
+        }
+        _ => (
+            fs.open_read(&item.src).await?,
+            tokio::fs::File::create(&part).await?,
+        ),
+    };
+    let copied = pump(&mut reader, &mut file, control, shared).await;
     let finished = match copied {
         Ok(()) => file.flush().await.map_err(TransferError::from),
+        Err(TransferError::Paused) => {
+            let _ = file.flush().await;
+            Err(TransferError::Paused)
+        }
         Err(e) => Err(e),
     };
     drop(file);
-    if let Err(e) = finished {
-        let _ = std::fs::remove_file(&tmp);
-        return Err(e);
+    match finished {
+        Ok(()) => {}
+        Err(TransferError::Cancelled) => {
+            let _ = std::fs::remove_file(&part);
+            state.remove_partial(&part);
+            return Err(TransferError::Cancelled);
+        }
+        // Pausa o errore: il parziale resta e verrà verificato alla ripresa.
+        Err(e) => return Err(e),
     }
-    if let Err(e) = std::fs::rename(&tmp, target) {
-        let _ = std::fs::remove_file(&tmp);
-        return Err(e.into());
+    let got = std::fs::metadata(&part)?.len();
+    if got != item.size {
+        let _ = std::fs::remove_file(&part);
+        state.remove_partial(&part);
+        return Err(TransferError::Io(format!(
+            "dimensione inattesa dopo il download ({got} su {} byte): il file è cambiato?",
+            item.size
+        )));
     }
+    // Sovrascrittura: su Windows `rename` non sostituisce un file esistente.
+    let _ = std::fs::remove_file(target);
+    std::fs::rename(&part, target)?;
+    state.remove_partial(&part);
     if let Some(t) = item.modified.filter(|t| *t >= 0) {
         if let Ok(f) = std::fs::OpenOptions::new().write(true).open(target) {
             let _ = f.set_modified(UNIX_EPOCH + Duration::from_secs(t as u64));
@@ -552,21 +873,12 @@ async fn download_file<F: RemoteFs>(
     Ok(())
 }
 
-/// Attende finché `cancel` diventa vero.
-async fn cancelled(cancel: &AtomicBool) {
-    while !cancel.load(Ordering::Relaxed) {
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-}
-
-/// Copia a blocchi, con annullamento (anche mentre si attende la rete) e avanzamento ogni ~100 ms.
+/// Copia a blocchi, con arresto (anche mentre si attende la rete) e avanzamento condiviso.
 async fn pump<R, W>(
     reader: &mut R,
     writer: &mut W,
-    cancel: &AtomicBool,
-    progress: &mut Progress,
-    last_report: &mut Instant,
-    on_progress: &mut (dyn FnMut(&Progress) + Send),
+    control: &Control,
+    shared: &Shared<'_>,
 ) -> Result<()>
 where
     R: AsyncRead + Unpin,
@@ -576,17 +888,13 @@ where
     loop {
         let n = tokio::select! {
             read = reader.read(&mut buf) => read?,
-            () = cancelled(cancel) => return Err(TransferError::Cancelled),
+            e = stopped(control) => return Err(e),
         };
         if n == 0 {
             return Ok(());
         }
         writer.write_all(&buf[..n]).await?;
-        progress.bytes_done += n as u64;
-        if last_report.elapsed() >= Duration::from_millis(100) {
-            on_progress(progress);
-            *last_report = Instant::now();
-        }
+        shared.add_bytes(n as u64);
     }
 }
 
