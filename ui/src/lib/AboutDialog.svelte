@@ -104,12 +104,12 @@
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 10px;
+    gap: 6px;
     text-align: center;
   }
   .pic {
     width: 100%;
-    max-height: 280px;
+    max-height: 190px;
     object-fit: contain;
     border-radius: 6px;
   }
@@ -146,8 +146,8 @@
   dl {
     display: grid;
     grid-template-columns: 110px 1fr;
-    gap: 4px 10px;
-    margin: 8px 0 0;
+    gap: 2px 10px;
+    margin: 4px 0 0;
     width: 100%;
     text-align: left;
     font-size: 13px;
