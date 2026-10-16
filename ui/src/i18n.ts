@@ -185,6 +185,8 @@ const it: Dict = {
   btnDownload: 'Scarica',
   navigation: 'Navigazione',
   viewOptions: 'Opzioni di visualizzazione',
+  downloadFiles: 'Scarica i file selezionati…',
+  downloadFolders: 'Scarica le cartelle selezionate…',
   loadError: 'Impossibile leggere le sessioni',
 }
 
@@ -373,6 +375,8 @@ const en: Dict = {
   btnDownload: 'Download',
   navigation: 'Navigation',
   viewOptions: 'View options',
+  downloadFiles: 'Download selected files…',
+  downloadFolders: 'Download selected folders…',
   loadError: 'Unable to read the sessions',
 }
 

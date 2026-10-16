@@ -56,7 +56,7 @@
       /* il salvataggio è solo una comodità */
     }
   }
-  let sidebarWidth = $state(load('pxt.sidebarWidth', 300))
+  let sidebarWidth = $state(load('pxt.sidebarWidth', 330))
   let sftpHeight = $state(load('pxt.sftpHeight', 300))
   let wide = $state(false)
   const NORMAL_WIDTH_MIN = 220

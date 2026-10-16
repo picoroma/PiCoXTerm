@@ -12,6 +12,7 @@
     | 'upload'
     | 'download'
     | 'folder-up'
+    | 'folder-down'
     | 'folder-plus'
     | 'plus'
 
@@ -43,6 +44,7 @@
     upload: [TRAY, 'M17 8l-5-5-5 5', 'M12 3v12'],
     download: [TRAY, 'M7 10l5 5 5-5', 'M12 15V3'],
     'folder-up': [FOLDER, 'M12 17v-6', 'M9 14l3-3 3 3'],
+    'folder-down': [FOLDER, 'M12 11v6', 'M9 14l3 3 3-3'],
     'folder-plus': [FOLDER, 'M12 11v6', 'M9 14h6'],
     plus: ['M12 5v14', 'M5 12h14'],
   }

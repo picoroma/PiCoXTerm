@@ -64,6 +64,11 @@
 
   const cur = $derived(connId !== null ? states[connId] : undefined)
 
+  /** Elementi selezionati, per tipo: i file e le cartelle si scaricano con due comandi distinti. */
+  const selectedEntries = $derived(cur ? cur.entries.filter((e) => selection.has(e.path)) : [])
+  const hasFiles = $derived(selectedEntries.some((e) => e.kind === 'file'))
+  const hasDirs = $derived(selectedEntries.some((e) => e.kind === 'dir'))
+
   const rows = $derived.by(() => {
     if (!cur) return []
     const q = filter.trim().toLowerCase()
@@ -314,15 +319,16 @@
     }
   }
 
-  /** Scarica la selezione in una cartella locale scelta dall'utente. */
-  async function downloadSelection() {
-    if (connId === null || !cur || selection.size === 0) return
+  /** Scarica in una cartella locale scelta dall'utente i file o le cartelle selezionati. */
+  async function downloadSelection(kind: 'file' | 'dir') {
+    if (connId === null || !cur) return
+    const paths = selectedEntries.filter((e) => e.kind === kind).map((e) => e.path)
+    if (paths.length === 0) return
     const id = connId
     actionError = ''
     try {
       const dest = await openDialog({ directory: true, multiple: false, title: t('downloadTo') })
       if (typeof dest !== 'string') return
-      const paths = [...selection]
       const plan = await invoke<PlanSummary>('transfer_plan_download', { id, remotePaths: paths, localDir: dest })
       const title = t('downloadTitle', { n: plan.fileCount, size: fmtBytes(plan.totalBytes), dir: dest })
       confirmAndStart(plan, title, () => {})
@@ -421,7 +427,8 @@
     <span class="group" role="group" aria-label={t('transfers')}>
       <button type="button" title={t('uploadFiles')} aria-label={t('uploadFiles')} disabled={!cur} onclick={() => pickUpload(false)}><Icon name="upload" /></button>
       <button type="button" title={t('uploadFolder')} aria-label={t('uploadFolder')} disabled={!cur} onclick={() => pickUpload(true)}><Icon name="folder-up" /></button>
-      <button type="button" title={t('downloadSelection')} aria-label={t('downloadSelection')} disabled={!cur || selection.size === 0} onclick={downloadSelection}><Icon name="download" /></button>
+      <button type="button" title={t('downloadFiles')} aria-label={t('downloadFiles')} disabled={!cur || !hasFiles} onclick={() => downloadSelection('file')}><Icon name="download" /></button>
+      <button type="button" title={t('downloadFolders')} aria-label={t('downloadFolders')} disabled={!cur || !hasDirs} onclick={() => downloadSelection('dir')}><Icon name="folder-down" /></button>
     </span>
     <span class="spacer"></span>
     <span class="group" role="group" aria-label={t('viewOptions')}>
@@ -517,8 +524,11 @@
 
 {#if menu}
   <div class="menu" role="menu" style:left="{menu.x}px" style:top="{menu.y}px">
-    {#if menu.entry}
-      <button role="menuitem" onclick={() => pick(downloadSelection)}>{t('downloadSelection')}</button>
+    {#if hasFiles}
+      <button role="menuitem" onclick={() => pick(() => downloadSelection('file'))}>{t('downloadFiles')}</button>
+    {/if}
+    {#if hasDirs}
+      <button role="menuitem" onclick={() => pick(() => downloadSelection('dir'))}>{t('downloadFolders')}</button>
     {/if}
     <button role="menuitem" onclick={() => pick(() => pickUpload(false))}>{t('uploadFiles')}</button>
     <button role="menuitem" onclick={() => pick(() => pickUpload(true))}>{t('uploadFolder')}</button>
