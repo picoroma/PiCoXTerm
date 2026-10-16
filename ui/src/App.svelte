@@ -4,6 +4,7 @@
   import SessionDialog from './lib/SessionDialog.svelte'
   import SessionTree from './lib/SessionTree.svelte'
   import TerminalTab from './lib/TerminalTab.svelte'
+  import EditorTab from './lib/EditorTab.svelte'
   import SettingsDialog from './lib/SettingsDialog.svelte'
   import AboutDialog from './lib/AboutDialog.svelte'
   import Icon from './lib/Icon.svelte'
@@ -12,11 +13,13 @@
   import { loadSettings } from './lib/settings.svelte'
   import { deleteNode, duplicateSession, listNodes, saveNode } from './lib/api'
   import { invoke } from '@tauri-apps/api/core'
-  import { newFolder, newSession, type TrackingInfo, type Folder, type Session, type SessionNode, type Target, type Uuid } from './lib/types'
+  import { newFolder, newSession, type SftpEntry, type TrackingInfo, type Folder, type Session, type SessionNode, type Target, type Uuid } from './lib/types'
   import { t } from './i18n'
 
   interface Tab {
     key: number
+    /** `terminal`: sessione SSH; `editor`: file remoto aperto nell'editor integrato (D-19). */
+    kind: 'terminal' | 'editor'
     title: string
     target: Target
     /** Collegamento SSH della scheda, per il pannello SFTP (aggiornato dalla scheda stessa). */
@@ -24,6 +27,9 @@
     cwd: string
     status: 'connecting' | 'connected' | 'closed'
     tracking: TrackingInfo
+    /** Solo per gli editor: percorso del file remoto e presenza di modifiche non salvate. */
+    editPath: string
+    dirty: boolean
   }
 
   let nodes = $state<SessionNode[]>([])
@@ -40,8 +46,16 @@
   let showSettings = $state(false)
   let showAbout = $state(false)
 
+  let closingEditor = $state<Tab | null>(null)
+
   const activeTab = $derived(tabs.find((x) => x.key === activeKey))
-  const liveConnIds = $derived(tabs.map((x) => x.connId).filter((id): id is number => id !== null))
+  /** Scheda a cui si riferisce il pannello SFTP: per un editor è il terminale della stessa connessione. */
+  const panelTab = $derived(
+    activeTab?.kind === 'editor' ? tabs.find((x) => x.kind === 'terminal' && x.connId === activeTab.connId) : activeTab,
+  )
+  const liveConnIds = $derived(
+    tabs.filter((x) => x.kind === 'terminal').map((x) => x.connId).filter((id): id is number => id !== null),
+  )
 
   // Dimensioni della sidebar e del pannello SFTP, ricordate tra un avvio e l'altro.
   const load = (key: string, fallback: number) => {
@@ -104,9 +118,30 @@
   })
 
   function openTab(title: string, target: Target) {
-    const tab: Tab = { key: nextKey++, title, target, connId: null, cwd: '', status: 'connecting', tracking: { state: 'pending', shell: null, message: null } }
+    const tab: Tab = { key: nextKey++, kind: 'terminal', title, target, connId: null, cwd: '', status: 'connecting', tracking: { state: 'pending', shell: null, message: null }, editPath: '', dirty: false }
     tabs.push(tab)
     activeKey = tab.key
+  }
+
+  /** Apre un file remoto nell'editor integrato (se è già aperto porta in primo piano la sua scheda). */
+  function openEditor(connId: number, entry: SftpEntry) {
+    const same = tabs.find((x) => x.kind === 'editor' && x.connId === connId && x.editPath === entry.path)
+    if (same) {
+      activeKey = same.key
+      return
+    }
+    const owner = tabs.find((x) => x.kind === 'terminal' && x.connId === connId)
+    if (!owner) return
+    const tab: Tab = { key: nextKey++, kind: 'editor', title: entry.name, target: owner.target, connId, cwd: '', status: 'connected', tracking: owner.tracking, editPath: entry.path, dirty: false }
+    tabs.push(tab)
+    activeKey = tab.key
+  }
+
+  /** Chiude una scheda; un editor con modifiche non salvate chiede prima conferma. */
+  function requestClose(key: number) {
+    const tab = tabs.find((x) => x.key === key)
+    if (tab?.kind === 'editor' && tab.dirty) closingEditor = tab
+    else closeTab(key)
   }
 
   function closeTab(key: number) {
@@ -185,7 +220,7 @@
 
   /** Attiva a mano il tracciamento della directory nella scheda attiva. */
   async function enableTracking() {
-    const tab = activeTab
+    const tab = panelTab
     if (!tab || tab.connId === null) return
     tab.tracking = { state: 'pending', shell: null, message: null }
     try {
@@ -244,13 +279,14 @@
     <div class="hsplit" role="separator" aria-orientation="horizontal" aria-label={t('resize')} onpointerdown={(e) => drag(e, 'height')}></div>
     <div class="sftp" style:height="{sftpHeight}px">
       <SftpPanel
-        connId={activeTab?.status === 'connected' ? activeTab.connId : null}
-        cwd={activeTab?.cwd ?? ''}
+        connId={panelTab?.status === 'connected' ? panelTab.connId : null}
+        cwd={panelTab?.cwd ?? ''}
         liveIds={liveConnIds}
-        tracking={activeTab?.tracking ?? { state: 'pending', shell: null, message: null }}
+        tracking={panelTab?.tracking ?? { state: 'pending', shell: null, message: null }}
         onenabletracking={enableTracking}
-        sessionName={activeTab?.title ?? ''}
-        sessionColor={sessionUi(activeTab?.target.sessionId)?.color ?? null}
+        onedit={openEditor}
+        sessionName={panelTab?.title ?? ''}
+        sessionColor={sessionUi(panelTab?.target.sessionId)?.color ?? null}
         {wide}
         onwiden={() => (wide = !wide)}
       />
@@ -277,14 +313,17 @@
           style:border-top-color={sessionUi(tab.target.sessionId)?.color ?? undefined}
           role="presentation"
         >
-          <button role="tab" aria-selected={tab.key === activeKey} onclick={() => (activeKey = tab.key)}>{tab.title}</button>
-          <button class="x" aria-label={t('closeTab')} title={t('closeTab')} onclick={() => closeTab(tab.key)}>×</button>
+          <button role="tab" aria-selected={tab.key === activeKey} title={tab.kind === 'editor' ? tab.editPath : undefined} onclick={() => (activeKey = tab.key)}>{tab.kind === 'editor' ? '✎ ' : ''}{tab.title}{tab.dirty ? ' ●' : ''}</button>
+          <button class="x" aria-label={t('closeTab')} title={t('closeTab')} onclick={() => requestClose(tab.key)}>×</button>
         </div>
       {/each}
     </div>
 
     <div class="views">
       {#each tabs as tab (tab.key)}
+        {#if tab.kind === 'editor' && tab.connId !== null}
+          <EditorTab connId={tab.connId} path={tab.editPath} name={tab.title} active={tab.key === activeKey} bind:dirty={tab.dirty} />
+        {:else}
         <TerminalTab
           target={tab.target}
           active={tab.key === activeKey}
@@ -296,6 +335,7 @@
           onmanagehostkeys={() => (showSettings = true)}
           savePassword={tab.target.sessionId ? passwordSaver(tab.target.sessionId) : undefined}
         />
+        {/if}
       {/each}
       {#if tabs.length === 0}
         <p class="welcome">{t('welcome')}</p>
@@ -304,6 +344,24 @@
     <TransferBar />
   </section>
 </main>
+
+{#if closingEditor}
+  <Modal title={t('editorCloseTitle')} onclose={() => (closingEditor = null)}>
+    <p>{t('editorCloseBody', { name: closingEditor.title })}</p>
+    {#snippet actions()}
+      <button type="button" class="primary" onclick={() => (closingEditor = null)}>{t('keepEditing')}</button>
+      <button
+        type="button"
+        class="danger"
+        onclick={() => {
+          const k = closingEditor?.key
+          closingEditor = null
+          if (k !== undefined) closeTab(k)
+        }}>{t('discard')}</button
+      >
+    {/snippet}
+  </Modal>
+{/if}
 
 {#if showAbout}
   <AboutDialog onclose={() => (showAbout = false)} />

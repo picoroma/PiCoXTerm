@@ -7,6 +7,13 @@
   --fg-dim: #999999;
   --accent: #2f6fed;
   --danger: #c0392b;
+  --syn-keyword: #c678dd;
+  --syn-string: #98c379;
+  --syn-number: #d19a66;
+  --syn-comment: #7f848e;
+  --syn-name: #61afef;
+  --syn-type: #e5c07b;
+  --syn-meta: #56b6c2;
   color-scheme: dark;
 }
 
@@ -17,6 +24,13 @@
   --border: #c4c4c4;
   --fg: #1e1e1e;
   --fg-dim: #5a5a5a;
+  --syn-keyword: #8e24aa;
+  --syn-string: #2e7d32;
+  --syn-number: #b35900;
+  --syn-comment: #6b7280;
+  --syn-name: #1c5fb5;
+  --syn-type: #9a6700;
+  --syn-meta: #00796b;
   color-scheme: light;
 }
 

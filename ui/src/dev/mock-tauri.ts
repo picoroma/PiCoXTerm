@@ -49,6 +49,15 @@ const eventChannels = new Map<number, string>()
 let connSeq = 6
 ;(window as any).__emitCwd = (path: string, connId?: number) =>
   emit(connId !== undefined ? eventChannels.get(connId)! : (window as any).__lastEvent, { type: 'cwd', path })
+const fileTexts: Record<string, { content: string; modified: number; size: number }> = {}
+;(window as any).__externalEdit = (path: string) => {
+  const c = fileTexts[path]
+  if (c) {
+    c.content += '# modificato da un altro\n'
+    c.size += 25
+    c.modified += 100
+  }
+}
 const plans = new Map<number, any>()
 const jobStates = new Map<number, { cancelled: boolean }>()
 let planSeq = 100
@@ -127,6 +136,21 @@ const handlers: Record<string, (args: any) => unknown> = {
     list.push(d(name, parent))
     fakeFs[`${parent === '/' ? '' : parent}/${name}`] = []
     return `${parent}/${name}`
+  },
+  // Editor integrato: contenuti finti in memoria. `__externalEdit(path)` simula la modifica di un altro utente.
+  sftp_read_text: ({ path }) => {
+    if (path.endsWith('.iso')) throw 'file troppo grande per l’editor (5000000000 byte, limite 5242880)'
+    const c = (fileTexts[path] ??= { content: `# ${path}\nexport PATH=$PATH:/opt/bin\necho "ciao"\n`, modified: 1_700_000_000, size: 60 })
+    return { content: c.content, encoding: path.endsWith('.log') ? 'latin1' : 'utf8', eol: path.endsWith('.log') ? 'crlf' : 'lf', mixedEol: path.endsWith('alpha.log'), size: c.size, modified: c.modified }
+  },
+  sftp_write_text: ({ path, content, base }) => {
+    const c = (fileTexts[path] ??= { content: '', modified: 1_700_000_000, size: 0 })
+    if (base && (base.size !== c.size || base.modified !== c.modified)) return { status: 'conflict', size: c.size, modified: c.modified, missing: false }
+    c.content = content
+    c.size = content.length
+    c.modified += 5
+    ;(window as any).__lastSaved = { path, content }
+    return { status: 'saved', size: c.size, modified: c.modified }
   },
   sftp_list: ({ path }) => {
     if (!(path in fakeFs)) throw `percorso non trovato: ${path}`

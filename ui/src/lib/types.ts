@@ -132,6 +132,20 @@ export interface SftpEntry {
   gid: number | null
 }
 
+/** File di testo aperto nell'editor integrato (il contenuto usa sempre `\n`). */
+export interface TextFile {
+  content: string
+  encoding: 'utf8' | 'utf8-bom' | 'latin1'
+  eol: 'lf' | 'crlf'
+  mixedEol: boolean
+  size: number
+  modified: number | null
+}
+
+export type SaveOutcome =
+  | { status: 'saved'; size: number; modified: number | null }
+  | { status: 'conflict'; size: number | null; modified: number | null; missing: boolean }
+
 /** Stato del tracciamento della directory del terminale (OSC 7) di una scheda. */
 export interface TrackingInfo {
   /** `pending` finché non si sa, poi `active`, `unsupported` (shell non gestita), `off` o `error`. */

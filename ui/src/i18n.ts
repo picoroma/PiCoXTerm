@@ -245,6 +245,27 @@ const it: Dict = {
   copyInfo: 'Copia informazioni',
   copied: 'Copiato',
   loadError: 'Impossibile leggere le sessioni',
+  editTooLarge: 'File troppo grande per l’editor (limite 5 MiB): scaricalo.',
+  editorOpening: 'Apertura del file…',
+  editorSave: 'Salva (Ctrl+S)',
+  editorSaving: 'Salvataggio…',
+  editorSaved: 'Salvato',
+  editorUnsaved: 'Modifiche non salvate',
+  editorReload: 'Ricarica dal server',
+  editorWrap: 'A capo automatico',
+  editorLine: 'Riga {l}, col. {c}',
+  editorMixedEol: 'Il file mescolava fine riga diversi: al salvataggio saranno tutti uniformati a {eol}.',
+  editorConflictTitle: 'Il file è cambiato sul server',
+  editorConflictBody: 'Dopo l’apertura qualcun altro ha modificato questo file. Se salvi adesso, le sue modifiche andranno perse.',
+  editorMissingBody: 'Il file non esiste più sul server. Salvando lo ricrei.',
+  editorOverwrite: 'Sovrascrivi',
+  editorDiscardReload: 'Scarta le mie e ricarica',
+  editorLoadFailed: 'Impossibile aprire il file',
+  editorCloseTitle: 'Chiudere senza salvare?',
+  editorCloseBody: 'Il file "{name}" ha modifiche non salvate: chiudendo andranno perse.',
+  discard: 'Scarta e chiudi',
+  keepEditing: 'Continua a modificare',
+  editorMemoryNote: 'Il contenuto resta in memoria: nessun file temporaneo su disco.',
 }
 
 const en: Dict = {
@@ -492,10 +513,31 @@ const en: Dict = {
   copyInfo: 'Copy information',
   copied: 'Copied',
   loadError: 'Unable to read the sessions',
+  editTooLarge: 'File too large for the editor (5 MiB limit): download it.',
+  editorOpening: 'Opening the file…',
+  editorSave: 'Save (Ctrl+S)',
+  editorSaving: 'Saving…',
+  editorSaved: 'Saved',
+  editorUnsaved: 'Unsaved changes',
+  editorReload: 'Reload from server',
+  editorWrap: 'Word wrap',
+  editorLine: 'Line {l}, col. {c}',
+  editorMixedEol: 'The file mixed different line endings: saving will make them all {eol}.',
+  editorConflictTitle: 'The file changed on the server',
+  editorConflictBody: 'Someone else modified this file after you opened it. If you save now, their changes will be lost.',
+  editorMissingBody: 'The file no longer exists on the server. Saving will recreate it.',
+  editorOverwrite: 'Overwrite',
+  editorDiscardReload: 'Discard mine and reload',
+  editorLoadFailed: 'Unable to open the file',
+  editorCloseTitle: 'Close without saving?',
+  editorCloseBody: 'The file "{name}" has unsaved changes: closing will lose them.',
+  discard: 'Discard and close',
+  keepEditing: 'Keep editing',
+  editorMemoryNote: 'The content stays in memory: no temporary file on disk.',
 }
 
 const dicts: Record<string, Dict> = { it, en }
-const lang = navigator.language.toLowerCase().startsWith('it') ? 'it' : 'en'
+export const lang = navigator.language.toLowerCase().startsWith('it') ? 'it' : 'en'
 
 export function t(key: string, vars: Record<string, string | number> = {}): string {
   let s = dicts[lang][key] ?? key

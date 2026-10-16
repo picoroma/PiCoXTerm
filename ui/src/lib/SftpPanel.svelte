@@ -22,6 +22,7 @@
     onwiden,
     tracking,
     onenabletracking,
+    onedit,
     sessionName = '',
     sessionColor = null,
   }: {
@@ -39,6 +40,8 @@
     tracking: TrackingInfo
     /** Attiva a mano il tracciamento. */
     onenabletracking: () => void
+    /** Apre un file nell'editor integrato. */
+    onedit?: (connId: number, entry: SftpEntry) => void
     /** Nome e colore della sessione SSH della scheda attiva, per capire a quale server appartengono i file. */
     sessionName?: string
     sessionColor?: string | null
@@ -431,6 +434,13 @@
     if (single) dialog = { type: 'props', entry: single }
   }
 
+  /** Limite dell'editor integrato (lo stesso del backend, `MAX_EDIT_BYTES`). */
+  const MAX_EDIT_BYTES = 5 * 1024 * 1024
+
+  function editSelected() {
+    if (connId !== null && single?.kind === 'file') onedit?.(connId, single)
+  }
+
   function copyPaths() {
     void writeText(selectedEntries.map((e) => e.path).join('\n'))
   }
@@ -653,7 +663,12 @@
     {#if hasDirs}
       <button role="menuitem" onclick={() => pick(() => downloadSelection('dir'))}>{t('downloadFolders')}</button>
     {/if}
-    {#if menu.entry}<hr />{/if}
+    {#if menu.entry}
+      {#if onedit}
+        <button role="menuitem" disabled={!single || single.kind !== 'file' || single.size > MAX_EDIT_BYTES} title={single && single.size > MAX_EDIT_BYTES ? t('editTooLarge') : undefined} onclick={() => pick(editSelected)}>{t('edit')}</button>
+      {/if}
+      <hr />
+    {/if}
     <button role="menuitem" onclick={() => pick(() => pickUpload(false))}>{t('uploadFiles')}</button>
     <button role="menuitem" onclick={() => pick(() => pickUpload(true))}>{t('uploadFolder')}</button>
     <hr />
