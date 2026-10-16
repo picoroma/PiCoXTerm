@@ -144,6 +144,7 @@ const handlers: Record<string, (args: any) => unknown> = {
     ;(window as any).__lastDecision = decision
     pendingReply?.(decision)
   },
+  about_info: () => ({ name: 'PiCoXterm', version: '0.1.0', commit: '5c3a9f1', buildDate: '2026-10-16', tauriVersion: '2.12.4', webviewVersion: '141.0.3537.71', os: 'windows', arch: 'x86_64', portable: false, dataDir: 'C:\\Users\\mock\\AppData\\Roaming\\PiCoXterm', auditLog: 'C:\\Users\\mock\\PiCoXterm\\logs\\audit.log' }),
   app_paths: () => ({ dataDir: 'C:\\Users\\mock\\PiCoXterm', auditLog: 'C:\\Users\\mock\\PiCoXterm\\logs\\audit.log' }),
   sessions_export: () => nodes.length,
   sessions_import: () => 3,
@@ -193,6 +194,10 @@ const handlers: Record<string, (args: any) => unknown> = {
     ;(window as any).__nextOpen = null
     return v
   },
+  'plugin:clipboard-manager|write_text': (a) => {
+    ;(window as any).__clipboard = a?.text
+  },
+  'plugin:clipboard-manager|read_text': () => (window as any).__clipboard ?? '',
   'plugin:event|listen': () => 1,
   'plugin:event|unlisten': () => {},
   // Trasferimenti finti: il piano ha conflitti se la cartella di destinazione contiene "conflict".

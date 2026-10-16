@@ -181,6 +181,45 @@ struct ConnectRequest {
     password: Option<String>,
 }
 
+/// Informazioni per la finestra "Informazioni su PiCoXterm".
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AboutInfo {
+    name: &'static str,
+    version: &'static str,
+    commit: &'static str,
+    build_date: &'static str,
+    tauri_version: &'static str,
+    webview_version: Option<String>,
+    os: &'static str,
+    arch: &'static str,
+    /// Con `portable.flag` accanto all'eseguibile i dati stanno nella cartella `data/`.
+    portable: bool,
+    data_dir: String,
+    audit_log: String,
+}
+
+#[tauri::command]
+fn about_info(state: Shared<'_>) -> AboutInfo {
+    let portable = std::env::current_exe()
+        .ok()
+        .and_then(|e| e.parent().map(|d| d.join("portable.flag").exists()))
+        .unwrap_or(false);
+    AboutInfo {
+        name: pxt_core::APP_NAME,
+        version: env!("CARGO_PKG_VERSION"),
+        commit: env!("PXT_GIT_COMMIT"),
+        build_date: env!("PXT_BUILD_DATE"),
+        tauri_version: tauri::VERSION,
+        webview_version: tauri::webview_version().ok(),
+        os: std::env::consts::OS,
+        arch: std::env::consts::ARCH,
+        portable,
+        data_dir: state.data_dir.display().to_string(),
+        audit_log: state.audit.path().display().to_string(),
+    }
+}
+
 #[tauri::command]
 fn app_info() -> String {
     format!("{} {}", pxt_core::APP_NAME, env!("CARGO_PKG_VERSION"))
@@ -1308,6 +1347,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             app_info,
+            about_info,
             app_paths,
             settings_get,
             settings_set,

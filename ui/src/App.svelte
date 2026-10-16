@@ -5,6 +5,8 @@
   import SessionTree from './lib/SessionTree.svelte'
   import TerminalTab from './lib/TerminalTab.svelte'
   import SettingsDialog from './lib/SettingsDialog.svelte'
+  import AboutDialog from './lib/AboutDialog.svelte'
+  import Icon from './lib/Icon.svelte'
   import SftpPanel from './lib/SftpPanel.svelte'
   import TransferBar from './lib/TransferBar.svelte'
   import { loadSettings } from './lib/settings.svelte'
@@ -36,6 +38,7 @@
   let deleting = $state<SessionNode | null>(null)
   let quick = $state('')
   let showSettings = $state(false)
+  let showAbout = $state(false)
 
   const activeTab = $derived(tabs.find((x) => x.key === activeKey))
   const liveConnIds = $derived(tabs.map((x) => x.connId).filter((id): id is number => id !== null))
@@ -214,6 +217,15 @@
   }
 </script>
 
+<svelte:window
+  onkeydown={(e) => {
+    if (e.key === 'F1') {
+      e.preventDefault()
+      showAbout = true
+    }
+  }}
+/>
+
 <main style:grid-template-columns="{effectiveWidth}px 5px 1fr">
   <aside>
     <div class="tree">
@@ -253,6 +265,7 @@
         <button type="submit">{t('connect')}</button>
       </form>
       <button type="button" class="gear" title={t('settings')} aria-label={t('settings')} onclick={() => (showSettings = true)}>⚙</button>
+      <button type="button" class="info" title={t('aboutTitle')} aria-label={t('aboutTitle')} onclick={() => (showAbout = true)}><Icon name="info" /></button>
     </div>
     {#if notice}<div class="notice">{notice}</div>{/if}
 
@@ -291,6 +304,10 @@
     <TransferBar />
   </section>
 </main>
+
+{#if showAbout}
+  <AboutDialog onclose={() => (showAbout = false)} />
+{/if}
 
 {#if showSettings}
   <SettingsDialog onclose={() => (showSettings = false)} onimported={reload} />
@@ -377,6 +394,11 @@
   }
   .topbar .gear {
     margin-left: auto;
+  }
+  .topbar .info {
+    display: inline-flex;
+    align-items: center;
+    padding: 6px 8px;
   }
   .topbar form {
     display: flex;

@@ -1,0 +1,4 @@
+Metti qui l'immagine della finestra "Informazioni su PiCoXterm":
+un file chiamato about.jpg (oppure .jpeg, .png, .webp, .svg).
+Viene incorporata nell'eseguibile al prossimo build.
+Dimensioni consigliate: circa 720 x 686 pixel (rapporto vicino a 1,05:1).
