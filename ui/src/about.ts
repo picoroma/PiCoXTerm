@@ -1,7 +1,7 @@
 // Contenuti della finestra "Informazioni su PiCoXterm" scelti dall'autore.
 
 export const ABOUT = {
-  author: 'Francesco Cocco',
+  author: 'PiCo',
   /** Licenza del progetto. Vuota = "da definire". */
   license: '',
   /** Frase sotto l'immagine (in corsivo). Vuota = non mostrata. */

@@ -6,7 +6,7 @@ members = ["crates/pxt-core", "crates/pxt-ssh", "crates/pxt-fs", "src-tauri"]
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
-authors = ["Francesco Cocco"]
+authors = ["PiCo"]
 
 [workspace.dependencies]
 thiserror = "2"
