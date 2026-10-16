@@ -156,7 +156,9 @@ const handlers: Record<string, (args: any) => unknown> = {
     if (!(path in fakeFs)) throw `percorso non trovato: ${path}`
     return fakeFs[path]
   },
-  ssh_write: () => {},
+  ssh_write: ({ data }) => {
+    ;(window as any).__lastWrite = new TextDecoder().decode(new Uint8Array(data))
+  },
   ssh_close: () => {},
   ssh_inject_cwd: () => {},
   known_hosts_list: () => [

@@ -59,6 +59,9 @@
 
   type SortKey = 'name' | 'size' | 'modified'
 
+  /** Limite dell'editor integrato (lo stesso del backend, `MAX_EDIT_BYTES`). */
+  const MAX_EDIT_BYTES = 5 * 1024 * 1024
+
   let states = $state<Record<number, PanelState>>({})
   let follow = $state(true)
   let showHidden = $state(false)
@@ -217,7 +220,32 @@
   }
 
   function open(e: SftpEntry) {
-    if (connId !== null && e.kind === 'dir') void go(connId, e.path)
+    if (connId === null) return
+    if (e.kind === 'dir') void go(connId, e.path)
+    // Doppio clic su un file: si apre nell'editor integrato (se non supera il limite).
+    else if (e.kind === 'file' && onedit && e.size <= MAX_EDIT_BYTES) onedit(connId, e)
+  }
+
+  /**
+   * Porta il terminale in una cartella scrivendo `cd '<percorso>'` e Invio nella shell. Un percorso con
+   * caratteri di controllo (a capo compreso) viene rifiutato: sarebbe un comando iniettato nel terminale.
+   */
+  async function cdTerminal(dir: string) {
+    if (connId === null) return
+    if (/[\u0000-\u001f\u007f]/.test(dir)) {
+      actionError = t('cdBadPath')
+      return
+    }
+    actionError = ''
+    // csh/tcsh espandono `!` (cronologia) anche tra apici: va protetto con una barra.
+    const csh = /csh$/.test(tracking.shell ?? '')
+    let quoted = dir.replace(/'/g, `'\\''`)
+    if (csh) quoted = quoted.replace(/!/g, '\\!')
+    try {
+      await invoke('ssh_write', { id: connId, data: Array.from(new TextEncoder().encode(`cd '${quoted}'\r`)) })
+    } catch (e) {
+      actionError = String(e)
+    }
   }
 
   function sortBy(key: SortKey) {
@@ -434,9 +462,6 @@
     if (single) dialog = { type: 'props', entry: single }
   }
 
-  /** Limite dell'editor integrato (lo stesso del backend, `MAX_EDIT_BYTES`). */
-  const MAX_EDIT_BYTES = 5 * 1024 * 1024
-
   function editSelected() {
     if (connId !== null && single?.kind === 'file') onedit?.(connId, single)
   }
@@ -564,6 +589,9 @@
       <button type="button" title={t('downloadFolders')} aria-label={t('downloadFolders')} disabled={!cur || !hasDirs} onclick={() => downloadSelection('dir')}><Icon name="folder-down" /></button>
     </span>
     <span class="spacer"></span>
+    <span class="group" role="group" aria-label={t('terminal')}>
+      <button type="button" title={t('cdHere')} aria-label={t('cdHere')} disabled={!cur} onclick={() => cur && void cdTerminal(cur.path)}><Icon name="terminal" /></button>
+    </span>
     <span class="group" role="group" aria-label={t('viewOptions')}>
       <button
         type="button"
@@ -664,6 +692,9 @@
       <button role="menuitem" onclick={() => pick(() => downloadSelection('dir'))}>{t('downloadFolders')}</button>
     {/if}
     {#if menu.entry}
+      {#if single?.kind === 'dir'}
+        <button role="menuitem" onclick={() => pick(() => single && void cdTerminal(single.path))}>{t('cdFolder')}</button>
+      {/if}
       {#if onedit}
         <button role="menuitem" disabled={!single || single.kind !== 'file' || single.size > MAX_EDIT_BYTES} title={single && single.size > MAX_EDIT_BYTES ? t('editTooLarge') : undefined} onclick={() => pick(editSelected)}>{t('edit')}</button>
       {/if}
@@ -681,6 +712,7 @@
       <button role="menuitem" disabled={!single} onclick={() => pick(askProps)}>{t('properties')} <kbd>Alt+⏎</kbd></button>
     {/if}
     <hr />
+    <button role="menuitem" onclick={() => pick(() => cur && void cdTerminal(cur.path))}>{t('cdHere')}</button>
     <button role="menuitem" onclick={() => pick(refreshCurrent)}>{t('refresh')}</button>
   </div>
 {/if}
