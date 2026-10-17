@@ -1,5 +1,7 @@
 <script lang="ts">
   import { untrack } from 'svelte'
+  import { invoke } from '@tauri-apps/api/core'
+  import { onMount } from 'svelte'
   import { testSession, type TestResult } from './api'
   import { homeDir, join } from '@tauri-apps/api/path'
   import { open } from '@tauri-apps/plugin-dialog'
@@ -50,18 +52,36 @@
   const jumpName = (id: string) => candidates.find((c) => c.id === id)?.name ?? `(${t('missingSession')})`
   const hasStoredSecret = initial.credentialRef !== null
   /** Una sessione SFTP non ha terminale: niente tema, font e sfondo; ha invece una cartella iniziale. */
-  const isSftp = initial.protocol === 'sftp'
-  let startPath = $state(initial.sftp.startPath ?? '')
-  let showHidden = $state(initial.sftp.showHidden)
+  const isFtp = initial.protocol === 'ftp'
+  /** Sessione che apre un file browser (SFTP o FTP): niente terminale, tema e font. */
+  const isSftp = initial.protocol === 'sftp' || isFtp
+  let startPath = $state((isFtp ? initial.ftp.startPath : initial.sftp.startPath) ?? '')
+  let showHidden = $state(isFtp ? initial.ftp.showHidden : initial.sftp.showHidden)
+  let ftpSecurity = $state(initial.ftp.security)
+  let pinnedCert = $state(initial.ftp.pinnedCert)
 
-  const usesSecret = $derived(method === 'password' || method === 'key')
+  // La policy dell'organizzazione può vietare l'FTP in chiaro.
+  let plainAllowed = $state(true)
+  onMount(() => {
+    invoke<{ policy: { allowPlainFtp: boolean } }>('policy_get')
+      .then((r) => (plainAllowed = r.policy.allowPlainFtp))
+      .catch(() => {})
+  })
+  const DEFAULT_PORT = { plain: 21, explicit: 21, implicit: 990 } as const
+  /** Cambiando il tipo si passa alla porta abituale, ma solo se non è stata scelta a mano. */
+  function onSecurityChange(next: 'plain' | 'explicit' | 'implicit') {
+    if (port === DEFAULT_PORT[ftpSecurity]) port = DEFAULT_PORT[next]
+    ftpSecurity = next
+  }
+
+  const usesSecret = $derived(isFtp || method === 'password' || method === 'key')
   const valid = $derived(
     host.trim() !== '' &&
       username.trim() !== '' &&
       Number.isInteger(port) &&
       port >= 1 &&
       port <= 65535 &&
-      (method !== 'key' || keyPath.trim() !== ''),
+      (isFtp || method !== 'key' || keyPath.trim() !== ''),
   )
 
   /** Cartella da cui aprire il selettore: quella della chiave attuale, altrimenti `~/.ssh`. */
@@ -107,9 +127,12 @@
       host: host.trim(),
       port,
       username: username.trim(),
-      auth: { method, keyPath: method === 'key' ? keyPath.trim() : null },
+      auth: { method: isFtp ? 'password' : method, keyPath: !isFtp && method === 'key' ? keyPath.trim() : null },
       jumpHosts: $state.snapshot(jumps),
-      sftp: { startPath: startPath.trim() || null, showHidden },
+      sftp: initial.protocol === 'sftp' ? { startPath: startPath.trim() || null, showHidden } : initial.sftp,
+      ftp: isFtp
+        ? { security: ftpSecurity, pinnedCert: pinnedCert, startPath: startPath.trim() || null, showHidden }
+        : initial.ftp,
       notes,
       ui: {
         ...initial.ui,
@@ -150,7 +173,7 @@
 </script>
 
 <Modal
-  title={isSftp ? (isNew ? t('newSftpSession') : t('editSftpSession')) : isNew ? t('newSession') : t('editSession')}
+  title={isFtp ? (isNew ? t('newFtpSession') : t('editFtpSession')) : isSftp ? (isNew ? t('newSftpSession') : t('editSftpSession')) : isNew ? t('newSession') : t('editSession')}
   onclose={oncancel}
 >
   <form id="session-form" onsubmit={submit}>
@@ -160,6 +183,26 @@
       <label class="narrow">{t('port')}<input type="number" min="1" max="65535" bind:value={port} required /></label>
     </div>
     <label>{t('user')}<input bind:value={username} required autocomplete="off" /></label>
+    {#if isFtp}
+      <label>
+        {t('ftpSecurity')}
+        <select value={ftpSecurity} onchange={(e) => onSecurityChange(e.currentTarget.value as 'plain' | 'explicit' | 'implicit')}>
+          <option value="explicit">{t('ftpExplicit')}</option>
+          <option value="implicit">{t('ftpImplicit')}</option>
+          {#if plainAllowed || ftpSecurity === 'plain'}
+            <option value="plain" disabled={!plainAllowed}>{t('ftpPlain')}</option>
+          {/if}
+        </select>
+      </label>
+      {#if ftpSecurity === 'plain'}
+        <p class="hint warn" role="status">{plainAllowed ? t('plainFtpWarning') : t('plainFtpForbidden')}</p>
+      {:else if pinnedCert}
+        <div class="hint pin">
+          <span>{t('ftpPinned')}: <code>{pinnedCert}</code></span>
+          <button type="button" onclick={() => (pinnedCert = null)}>{t('ftpForgetCert')}</button>
+        </div>
+      {/if}
+    {:else}
     <label>
       {t('authMethod')}
       <select bind:value={method}>
@@ -168,6 +211,7 @@
         <option value="agent">{t('methodAgent')}</option>
       </select>
     </label>
+    {/if}
     {#if method === 'key'}
       <label>
         {t('keyFile')}
@@ -198,6 +242,7 @@
     {#if hasStoredSecret}
       <label class="check"><input type="checkbox" bind:checked={clearSecret} /> {t('clearPassword')}</label>
     {/if}
+    {#if !isFtp}
     <fieldset>
       <legend>{t('jumpHosts')}</legend>
       {#each jumps as id, i (id)}
@@ -219,9 +264,10 @@
       </div>
       {#if jumps.length > 0}<p class="hint">{t('jumpHint')}</p>{/if}
     </fieldset>
+    {/if}
     {#if isSftp}
       <fieldset>
-        <legend>{t('sftp')}</legend>
+        <legend>{isFtp ? 'FTP' : t('sftp')}</legend>
         <label>
           {t('sftpStartPath')}
           <input bind:value={startPath} placeholder="/home/utente" spellcheck="false" />
@@ -367,5 +413,21 @@
     margin: 0;
     font-size: 13px;
     color: var(--fg-dim);
+  }
+  .hint.warn {
+    padding: 6px 8px;
+    border: 1px solid #f0ad4e;
+    border-radius: 4px;
+    color: var(--fg);
+  }
+  .hint.pin {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .hint.pin code {
+    font-size: 11px;
+    word-break: break-all;
   }
 </style>

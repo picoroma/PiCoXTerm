@@ -21,7 +21,12 @@ const files = { ...newSession(root.id, 'sftp'), name: 'FILES srv (SFTP)', host: 
 files.sftp = { startPath: '/home/u/projects', showHidden: false }
 files.ui.color = '#2e8b57'
 const filesPw = { ...newSession(null, 'sftp'), name: 'FILES password (SFTP)', host: '10.0.0.9', username: 'u' }
-let nodes: SessionNode[] = [root, pw, key, prod, test, files, filesPw]
+const ftpTls = { ...newSession(root.id, 'ftp'), name: 'FTPS prova (FTP)', host: 'ftp.test', port: 21, username: 'test' }
+ftpTls.credentialRef = { provider: 'local', id: 'f1' }
+const ftpPlain = { ...newSession(null, 'ftp'), name: 'FTP in chiaro', host: 'ftp.plain', port: 21, username: 'test' }
+ftpPlain.credentialRef = { provider: 'local', id: 'f2' }
+ftpPlain.ftp = { security: 'plain', pinnedCert: null, startPath: null, showHidden: false }
+let nodes: SessionNode[] = [root, pw, key, prod, test, files, filesPw, ftpTls, ftpPlain]
 
 let nextCallback = 0
 const callbacks = new Map<number, (m: unknown) => void>()
@@ -288,6 +293,27 @@ const handlers: Record<string, (args: any) => unknown> = {
       return 1
     }
     throw 'password-required'
+  },
+  // Policy dell'organizzazione finta: `window.__allowPlain = false` vieta l'FTP in chiaro.
+  policy_get: () => ({ policy: { allowPlainFtp: (window as any).__allowPlain ?? true, allowedProtocols: null }, warning: null }),
+  // Sessione FTP finta: FTPS con certificato da confermare (impronta finta), FTP in chiaro se la policy lo permette.
+  ftp_connect: async ({ request, onEvent }) => {
+    ;(window as any).__lastFtpConnect = request
+    const s: any = nodes.find((n) => n.id === request.sessionId)
+    if (s.ftp.security === 'plain') {
+      if ((window as any).__allowPlain === false) throw 'L’FTP in chiaro è vietato dalla policy dell’organizzazione: usa FTPS (TLS esplicito o implicito).'
+      return ++connSeq
+    }
+    const pinned = request.pinnedCert ?? s.ftp.pinnedCert
+    if (!pinned) {
+      emit(onEvent, { type: 'certUntrusted', host: s.host, port: s.port, fingerprint: 'AB:CD:EF:01:23:45:67:89:AB:CD:EF:01:23:45:67:89:AB:CD:EF:01:23:45:67:89:AB:CD:EF:01:23:45:67:89', changed: false })
+      throw 'certificate-untrusted'
+    }
+    if (pinned === 'CAMBIATO') {
+      emit(onEvent, { type: 'certUntrusted', host: s.host, port: s.port, fingerprint: 'FF:FF:FF:FF:FF:FF:FF:FF:FF:FF:FF:FF:FF:FF:FF:FF:FF:FF:FF:FF:FF:FF:FF:FF:FF:FF:FF:FF:FF:FF:FF:FF', changed: true })
+      throw 'certificate-untrusted'
+    }
+    return ++connSeq
   },
   // Sessione SFTP finta: stessa logica di ssh_connect, senza terminale.
   sftp_connect: async ({ request, onEvent }) => {

@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import { Channel, invoke } from '@tauri-apps/api/core'
-  import ConnectPrompts, { type HostKeyChange, type HostKeyRequest } from './ConnectPrompts.svelte'
+  import ConnectPrompts, { type CertRequest, type HostKeyChange, type HostKeyRequest } from './ConnectPrompts.svelte'
   import DualPane from './DualPane.svelte'
   import { t } from '../i18n'
   import type { SftpEntry, Target } from './types'
@@ -9,11 +9,15 @@
   type TermEvent =
     | ({ type: 'hostKey' } & HostKeyRequest)
     | ({ type: 'hostKeyChanged' } & HostKeyChange)
+    | ({ type: 'certUntrusted' } & CertRequest)
     | { type: 'closed'; exit: number | null }
 
   let {
     target,
     active,
+    protocol = 'sftp',
+    plainFtp = false,
+    onpincert,
     startPath = null,
     showHidden = false,
     sessionName = '',
@@ -27,6 +31,12 @@
   }: {
     target: Target
     active: boolean
+    /** `ftp`: sessione FTP o FTPS (comando `ftp_connect`, conferma del certificato). */
+    protocol?: 'sftp' | 'ftp'
+    /** FTP senza cifratura: si avvisa che password e dati viaggiano in chiaro. */
+    plainFtp?: boolean
+    /** Salva nella sessione l'impronta del certificato che l'utente ha accettato. */
+    onpincert?: (fingerprint: string) => Promise<void>
     /** Cartella remota da aprire alla connessione (vuoto = home). */
     startPath?: string | null
     showHidden?: boolean
@@ -43,6 +53,7 @@
   const PASSWORD_REQUIRED = 'password-required'
   const PASSPHRASE_REQUIRED = 'passphrase-required'
   const HOSTKEY_CHANGED = 'hostkey-changed'
+  const CERT_UNTRUSTED = 'certificate-untrusted'
 
   let error = $state('')
   let hostKeyPrompt = $state<HostKeyRequest | null>(null)
@@ -50,28 +61,43 @@
   let askPassword = $state(false)
   let askKind = $state<'password' | 'passphrase'>('password')
   let saveRequested = $state(false)
+  let certPrompt = $state<CertRequest | null>(null)
+  /** Password già digitata in questa apertura: serve a riprovare dopo la conferma del certificato. */
+  let lastPassword: string | undefined
 
-  async function connect(password?: string) {
+  async function connect(password?: string, pinnedCert?: string) {
     error = ''
     status = 'connecting'
+    lastPassword = password
     const onEvent = new Channel<TermEvent>()
     onEvent.onmessage = (ev) => {
       if (ev.type === 'hostKey') hostKeyPrompt = ev
       else if (ev.type === 'hostKeyChanged') hostKeyChanged = ev
+      else if (ev.type === 'certUntrusted') certPrompt = ev
     }
     try {
-      connId = await invoke<number>('sftp_connect', {
-        request: {
-          sessionId: target.sessionId ?? null,
-          host: target.host ?? null,
-          port: target.port ?? null,
-          username: target.username ?? null,
-          password: password ?? null,
-        },
-        onEvent,
-      })
+      connId =
+        protocol === 'ftp'
+          ? await invoke<number>('ftp_connect', {
+              request: { sessionId: target.sessionId, password: password ?? null, pinnedCert: pinnedCert ?? null },
+              onEvent,
+            })
+          : await invoke<number>('sftp_connect', {
+              request: {
+                sessionId: target.sessionId ?? null,
+                host: target.host ?? null,
+                port: target.port ?? null,
+                username: target.username ?? null,
+                password: password ?? null,
+              },
+              onEvent,
+            })
     } catch (e) {
       status = 'closed'
+      if (String(e) === CERT_UNTRUSTED) {
+        // La finestra di conferma è già aperta (evento `certUntrusted`): niente messaggio d'errore.
+        return
+      }
       if (String(e) === PASSWORD_REQUIRED || String(e) === PASSPHRASE_REQUIRED) {
         askKind = String(e) === PASSPHRASE_REQUIRED ? 'passphrase' : 'password'
         askPassword = true
@@ -102,6 +128,25 @@
     await invoke('hostkey_reply', { reqId, decision })
   }
 
+  /** Risposta alla finestra del certificato: si riprova con l'impronta accettata. */
+  async function replyCert(decision: 'once' | 'save' | 'reject') {
+    const cert = certPrompt
+    certPrompt = null
+    if (!cert || decision === 'reject') {
+      if (cert) error = t('certRejected')
+      return
+    }
+    if (decision === 'save') {
+      try {
+        await onpincert?.(cert.fingerprint)
+      } catch (e) {
+        error = String(e)
+        return
+      }
+    }
+    await connect(lastPassword, cert.fingerprint)
+  }
+
   async function disconnect() {
     const id = connId
     connId = null
@@ -120,7 +165,7 @@
 <div class="tab" class:hidden={!active}>
   <div class="tools">
     {#if status === 'connected'}
-      <span class="dim">{t('sftpConnected')}</span>
+      <span class="dim">{protocol === 'ftp' ? t('ftpConnected') : t('sftpConnected')}</span>
       <button type="button" onclick={disconnect}>{t('disconnect')}</button>
     {:else if status === 'connecting'}
       <span class="dim">{t('connecting')}</span>
@@ -128,6 +173,9 @@
       <button type="button" class="primary" onclick={() => connect()}>{t('reconnect')}</button>
     {/if}
   </div>
+  {#if plainFtp && status === 'connected'}
+    <div class="warn" role="status">{t('plainFtpWarning')}</div>
+  {/if}
   {#if error}<div class="error">{error}</div>{/if}
 
   <div class="panel">
@@ -151,6 +199,8 @@
   {askPassword}
   {askKind}
   canSave={!!target.sessionId && !!savePassword}
+  {certPrompt}
+  oncertreply={replyCert}
   onreplyhostkey={replyHostKey}
   ondismisshostkeychanged={() => (hostKeyChanged = null)}
   onsubmitpassword={submitPassword}
@@ -177,6 +227,12 @@
   }
   .dim {
     color: var(--fg-dim);
+  }
+  .warn {
+    padding: 6px 8px;
+    background: #5a3d1d;
+    color: #ffe4c4;
+    font-size: 13px;
   }
   .error {
     padding: 8px;

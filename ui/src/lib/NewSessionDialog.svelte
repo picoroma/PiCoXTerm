@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte'
+  import { invoke } from '@tauri-apps/api/core'
   import Icon from './Icon.svelte'
   import Modal from './Modal.svelte'
   import { PROTOCOLS, type Protocol } from './protocols'
@@ -8,8 +9,16 @@
   let { onpick, onclose }: { onpick: (protocol: Protocol) => void; onclose: () => void } = $props()
 
   let grid = $state<HTMLDivElement>()
+  /** Protocolli vietati dalla policy dell'organizzazione (se c'è un elenco, solo quelli sono consentiti). */
+  let allowed = $state<string[] | null>(null)
 
-  onMount(() => grid?.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus())
+  onMount(() => {
+    invoke<{ policy: { allowedProtocols: string[] | null } }>('policy_get')
+      .then((r) => (allowed = r.policy.allowedProtocols))
+      .catch(() => {})
+    grid?.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus()
+  })
+  const forbidden = (id: string) => allowed !== null && !allowed.includes(id)
 </script>
 
 <Modal title={t('newSessionTitle')} {onclose} width="min(640px, 94vw)">
@@ -19,14 +28,14 @@
       <button
         type="button"
         class="tile"
-        disabled={!p.available}
+        disabled={!p.available || forbidden(p.id)}
         onclick={() => onpick(p.id)}
         aria-label={`${t(`proto_${p.id}`)}${p.available ? '' : ` (${t('soon')})`}`}
       >
         <span class="ico"><Icon name={p.icon} size={30} /></span>
         <strong>{t(`proto_${p.id}`)}</strong>
         <span class="desc">{t(`proto_${p.id}_desc`)}</span>
-        {#if !p.available}<span class="soon">{t('soon')}</span>{/if}
+        {#if !p.available}<span class="soon">{t('soon')}</span>{:else if forbidden(p.id)}<span class="soon">{t('byPolicy')}</span>{/if}
       </button>
     {/each}
   </div>

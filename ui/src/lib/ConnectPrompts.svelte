@@ -9,6 +9,13 @@
     keyType: string
     fingerprint: string
   }
+  export interface CertRequest {
+    host: string
+    port: number
+    fingerprint: string
+    /** Prima c'era un'altra impronta accettata: il certificato è cambiato. */
+    changed: boolean
+  }
   export interface HostKeyChange {
     host: string
     port: number
@@ -23,6 +30,8 @@
     askPassword,
     askKind,
     canSave,
+    certPrompt = null,
+    oncertreply,
     onreplyhostkey,
     ondismisshostkeychanged,
     onsubmitpassword,
@@ -35,6 +44,9 @@
     askKind: 'password' | 'passphrase'
     /** Si può salvare la password nella sessione (solo sessioni salvate). */
     canSave: boolean
+    /** FTPS: certificato del server da confermare. */
+    certPrompt?: CertRequest | null
+    oncertreply?: (decision: 'once' | 'save' | 'reject') => void
     onreplyhostkey: (decision: 'once' | 'save' | 'reject') => void
     ondismisshostkeychanged: () => void
     onsubmitpassword: (password: string, save: boolean) => void
@@ -77,6 +89,23 @@
     {#snippet actions()}
       <button type="button" onclick={oncancelpassword}>{t('cancel')}</button>
       <button type="submit" form="pw-form" class="primary">{t('connect')}</button>
+    {/snippet}
+  </Modal>
+{/if}
+
+{#if certPrompt}
+  <Modal title={certPrompt.changed ? t('certChangedTitle') : t('certTitle')} onclose={() => oncertreply?.('reject')}>
+    <p class:alert={certPrompt.changed}>{certPrompt.changed ? t('certChangedBody') : t('certBody')}</p>
+    <dl>
+      <dt>{t('host')}</dt>
+      <dd>{certPrompt.host}:{certPrompt.port}</dd>
+      <dt>{t('certFingerprint')}</dt>
+      <dd class="mono">{certPrompt.fingerprint}</dd>
+    </dl>
+    {#snippet actions()}
+      <button onclick={() => oncertreply?.('reject')}>{t('cancel')}</button>
+      <button onclick={() => oncertreply?.('once')}>{t('acceptOnce')}</button>
+      <button class="primary" onclick={() => oncertreply?.('save')}>{certPrompt.changed ? t('certReplace') : t('accept')}</button>
     {/snippet}
   </Modal>
 {/if}

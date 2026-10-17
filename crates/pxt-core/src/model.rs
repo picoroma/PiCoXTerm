@@ -76,6 +76,32 @@ impl Default for SshOptions {
     }
 }
 
+/// Come si protegge una connessione FTP.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum FtpSecurity {
+    /// FTP in chiaro: password e dati senza cifratura (può essere vietato dalla policy).
+    Plain,
+    /// FTPS esplicito: si parte in chiaro e si passa a TLS con `AUTH TLS` (porta 21).
+    #[default]
+    Explicit,
+    /// FTPS implicito: TLS subito (di norma porta 990).
+    Implicit,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FtpOptions {
+    pub security: FtpSecurity,
+    /// Impronta SHA-256 del certificato del server che l'utente ha accettato (solo FTPS). Dato pubblico.
+    #[serde(default)]
+    pub pinned_cert: Option<String>,
+    #[serde(default)]
+    pub start_path: Option<String>,
+    #[serde(default)]
+    pub show_hidden: bool,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SftpOptions {
@@ -153,6 +179,8 @@ pub struct Session {
     #[serde(default)]
     pub sftp: SftpOptions,
     #[serde(default)]
+    pub ftp: FtpOptions,
+    #[serde(default)]
     pub ui: UiOptions,
     #[serde(default)]
     pub notes: String,
@@ -194,6 +222,7 @@ impl Session {
             jump_hosts: Vec::new(),
             ssh: SshOptions::default(),
             sftp: SftpOptions::default(),
+            ftp: FtpOptions::default(),
             ui: UiOptions::default(),
             notes: String::new(),
             created_at: now,

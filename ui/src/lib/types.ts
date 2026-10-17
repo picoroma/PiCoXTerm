@@ -34,7 +34,7 @@ export interface Session {
   id: Uuid
   parentId: Uuid | null
   name: string
-  protocol: 'ssh' | 'sftp'
+  protocol: 'ssh' | 'sftp' | 'ftp'
   host: string
   port: number
   username: string
@@ -50,6 +50,7 @@ export interface Session {
     encoding: string
   }
   sftp: { startPath: string | null; showHidden: boolean }
+  ftp: { security: 'plain' | 'explicit' | 'implicit'; pinnedCert: string | null; startPath: string | null; showHidden: boolean }
   ui: SessionUi
   notes: string
   createdAt: string
@@ -94,6 +95,7 @@ export function newSession(parentId: Uuid | null, protocol: Session['protocol'] 
       encoding: 'utf-8',
     },
     sftp: { startPath: null, showHidden: false },
+    ftp: { security: 'explicit', pinnedCert: null, startPath: null, showHidden: false },
     ui: { color: null, icon: null, tags: [], theme: null, fontFamily: null, fontSize: null, background: null },
     notes: '',
     createdAt: now,

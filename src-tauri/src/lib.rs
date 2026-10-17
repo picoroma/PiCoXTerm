@@ -13,7 +13,7 @@ use pxt_fs::external as fs_external;
 use pxt_fs::ops as fs_ops;
 use pxt_fs::transfer as fs_transfer;
 use pxt_fs::transfer::{ConflictPolicy, Progress};
-use pxt_fs::{Entry, RemoteFs, SftpFs};
+use pxt_fs::{AnyFs, Entry, FtpFs, FtpParams, RemoteFs, SftpFs};
 use pxt_ssh::{
     ConnectParams, Credentials, Hop, HostKeyDecision, HostKeyInfo, HostKeyVerifier, KnownHosts,
     Shell, ShellEvent, SshError,
@@ -40,7 +40,10 @@ struct AppState {
     /// Connessioni delle sessioni SFTP: senza shell, solo il sottosistema SFTP.
     sftp_conns: Mutex<HashMap<u64, pxt_ssh::SftpConnection>>,
     /// Sessioni SFTP, una per connessione, aperte al primo uso sulla stessa connessione SSH.
-    sftp: tokio::sync::Mutex<HashMap<u64, Arc<SftpFs>>>,
+    sftp: tokio::sync::Mutex<HashMap<u64, Arc<AnyFs>>>,
+    /// Policy dell'organizzazione (`policy.json`, sola lettura) e l'eventuale avviso se non è valida.
+    policy: pxt_core::Policy,
+    policy_warning: Option<String>,
     /// Piani di trasferimento in attesa di conferma (una scelta sui conflitti) o di avvio.
     plans: Mutex<HashMap<u64, StoredPlan>>,
     /// Trasferimenti in corso: segnale di controllo (pausa, annullamento) di ciascuno.
@@ -57,7 +60,10 @@ struct AppState {
 
 impl AppState {
     fn new(data_dir: PathBuf) -> Self {
+        let (policy, policy_warning) = pxt_core::Policy::load(&data_dir.join("policy.json"));
         Self {
+            policy,
+            policy_warning,
             sessions: LocalSessionProvider::new(data_dir.join("sessions.json")),
             settings: LocalSettings::new(data_dir.join("settings.json")),
             audit: AuditLog::new(data_dir.join("logs")),
@@ -85,7 +91,7 @@ impl AppState {
     fn audit(&self, ctx: &AuditCtx, event: &str, outcome: Outcome, detail: Option<String>) {
         let _ = self.audit.record(&AuditEvent {
             event: event.into(),
-            protocol: "ssh".into(),
+            protocol: ctx.protocol.into(),
             host: ctx.host.clone(),
             port: ctx.port,
             user: ctx.user.clone(),
@@ -104,6 +110,8 @@ struct AuditCtx {
     user: String,
     /// Jump host attraversati (`host:porta`).
     via: Vec<String>,
+    /// Protocollo della connessione (`ssh`, `sftp`, `ftp`), per il log di audit.
+    protocol: &'static str,
 }
 
 /// Dettagli di una host key cambiata, anche se avvenuta su un jump host.
@@ -164,6 +172,15 @@ enum TermEvent {
         port: u16,
         expected: String,
         got: String,
+    },
+    /// FTPS: il certificato del server non è verificabile (e non è stato accettato prima, o è cambiato).
+    #[serde(rename_all = "camelCase")]
+    CertUntrusted {
+        host: String,
+        port: u16,
+        fingerprint: String,
+        /// C'era già un'impronta accettata e questa è diversa: potrebbe essere un attacco.
+        changed: bool,
     },
     /// Esito dell'attivazione del tracciamento della directory del terminale.
     Tracking {
@@ -506,6 +523,9 @@ async fn session_test(
     session: Session,
     password: Option<String>,
 ) -> Result<TestResult, String> {
+    if session.protocol == Protocol::Ftp {
+        return Ok(ftp_test(&state, &session, password).await);
+    }
     if !matches!(session.protocol, Protocol::Ssh | Protocol::Sftp) {
         return Ok(TestResult::new("error", "protocollo non ancora supportato"));
     }
@@ -535,6 +555,11 @@ async fn session_test(
             .iter()
             .map(|h| format!("{}:{}", h.host, h.port))
             .collect(),
+        protocol: if session.protocol == Protocol::Sftp {
+            "sftp"
+        } else {
+            "ssh"
+        },
     };
     hops.push(Hop {
         host: dest.host,
@@ -678,6 +703,11 @@ async fn prepare_connection(
             .iter()
             .map(|h| format!("{}:{}", h.host, h.port))
             .collect(),
+        protocol: if wanted == Protocol::Sftp {
+            "sftp"
+        } else {
+            "ssh"
+        },
     };
     hops.push(Hop {
         host: dest.host.clone(),
@@ -910,8 +940,213 @@ fn get_shell(state: &AppState, id: u64) -> Result<Shell, String> {
         .ok_or_else(|| "sessione inesistente".to_string())
 }
 
+// ---- Sessioni FTP e FTPS ----
+
+/// Codice d'errore letto dalla UI: il certificato del server va confermato dall'utente.
+const CERT_UNTRUSTED: &str = "certificate-untrusted";
+
+fn ftp_security(s: pxt_core::FtpSecurity) -> pxt_fs::FtpSecurity {
+    match s {
+        pxt_core::FtpSecurity::Plain => pxt_fs::FtpSecurity::Plain,
+        pxt_core::FtpSecurity::Explicit => pxt_fs::FtpSecurity::Explicit,
+        pxt_core::FtpSecurity::Implicit => pxt_fs::FtpSecurity::Implicit,
+    }
+}
+
+/// Divieti della policy per una sessione FTP; `Err` con il motivo da mostrare.
+fn ftp_policy_check(state: &AppState, session: &Session) -> Result<(), String> {
+    if !state.policy.allows(Protocol::Ftp) {
+        return Err("Il protocollo FTP è vietato dalla policy dell'organizzazione.".into());
+    }
+    if session.ftp.security == pxt_core::FtpSecurity::Plain && !state.policy.allow_plain_ftp {
+        return Err(
+            "L'FTP in chiaro è vietato dalla policy dell'organizzazione: usa FTPS (TLS esplicito o implicito)."
+                .into(),
+        );
+    }
+    Ok(())
+}
+
+/// Parametri di connessione di una sessione FTP. `Err(PASSWORD_REQUIRED)` se manca la password.
+async fn ftp_params(
+    state: &AppState,
+    session: &Session,
+    password: Option<String>,
+    pinned_override: Option<String>,
+) -> Result<FtpParams, String> {
+    let secret = match password {
+        Some(p) => Some(p),
+        None => stored_secret(state, &session.credential_ref).await?,
+    };
+    let password = match secret {
+        Some(p) => p,
+        // L'accesso anonimo si fa con l'utente `anonymous` e un indirizzo come password.
+        None if session.username.eq_ignore_ascii_case("anonymous") => "anonymous@".to_string(),
+        None => return Err(PASSWORD_REQUIRED.to_string()),
+    };
+    Ok(FtpParams {
+        host: session.host.clone(),
+        port: session.port,
+        username: session.username.clone(),
+        password,
+        security: ftp_security(session.ftp.security),
+        pinned_cert: pinned_override.or_else(|| session.ftp.pinned_cert.clone()),
+        max_connections: 4,
+    })
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FtpConnectRequest {
+    session_id: Uuid,
+    /// Password digitata ora dall'utente (ha la precedenza su quella nel keyring).
+    password: Option<String>,
+    /// Impronta del certificato accettata ora dall'utente, anche senza salvarla nella sessione.
+    pinned_cert: Option<String>,
+}
+
+fn find_ftp_session(nodes: &[SessionNode], id: Uuid) -> Result<Session, String> {
+    match nodes.iter().find(|n| n.id() == id) {
+        Some(SessionNode::Session(s)) if s.protocol == Protocol::Ftp => Ok((**s).clone()),
+        Some(_) => Err("la sessione non è una sessione FTP".into()),
+        None => Err("sessione non trovata".into()),
+    }
+}
+
+/// Collega una sessione FTP o FTPS. Un certificato non verificabile non si accetta mai in silenzio:
+/// la UI riceve `certUntrusted` con l'impronta e decide l'utente (poi si riprova con `pinnedCert`).
+#[tauri::command]
+async fn ftp_connect(
+    state: Shared<'_>,
+    request: FtpConnectRequest,
+    on_event: Channel<TermEvent>,
+) -> Result<u64, String> {
+    let nodes = state.sessions.list().await.map_err(err)?;
+    let session = find_ftp_session(&nodes, request.session_id)?;
+    let ctx = AuditCtx {
+        host: session.host.clone(),
+        port: session.port,
+        user: session.username.clone(),
+        via: Vec::new(),
+        protocol: "ftp",
+    };
+    if let Err(reason) = ftp_policy_check(&state, &session) {
+        state.audit(
+            &ctx,
+            "connect",
+            Outcome::Failed,
+            Some("vietato dalla policy".into()),
+        );
+        return Err(reason);
+    }
+    let params = ftp_params(&state, &session, request.password, request.pinned_cert).await?;
+    let mode = format!("{:?}", session.ftp.security).to_lowercase();
+    match FtpFs::connect(params).await {
+        Ok(fs) => {
+            let detail = if session.ftp.security == pxt_core::FtpSecurity::Plain {
+                format!("{mode}: senza cifratura")
+            } else {
+                mode
+            };
+            state.audit(&ctx, "connect", Outcome::Ok, Some(detail));
+            let id = state.next_id();
+            state.sftp.lock().await.insert(id, Arc::new(AnyFs::Ftp(fs)));
+            state.conn_ctx.lock().unwrap().insert(id, ctx);
+            Ok(id)
+        }
+        Err(pxt_fs::FsError::UntrustedCertificate {
+            fingerprint,
+            changed,
+        }) => {
+            state.audit(
+                &ctx,
+                if changed {
+                    "cert_changed"
+                } else {
+                    "cert_untrusted"
+                },
+                Outcome::Failed,
+                Some(format!("SHA256 {fingerprint}")),
+            );
+            let _ = on_event.send(TermEvent::CertUntrusted {
+                host: session.host,
+                port: session.port,
+                fingerprint,
+                changed,
+            });
+            Err(CERT_UNTRUSTED.to_string())
+        }
+        Err(e) => {
+            state.audit(&ctx, "connect", Outcome::Failed, Some(e.to_string()));
+            Err(e.to_string())
+        }
+    }
+}
+
+/// Prova una sessione FTP (anche non salvata) senza tenerla aperta.
+async fn ftp_test(
+    state: &Arc<AppState>,
+    session: &Session,
+    password: Option<String>,
+) -> TestResult {
+    if let Err(reason) = ftp_policy_check(state, session) {
+        return TestResult::new("error", reason);
+    }
+    let params = match ftp_params(state, session, password.filter(|p| !p.is_empty()), None).await {
+        Ok(p) => p,
+        Err(e) if e == PASSWORD_REQUIRED => {
+            return TestResult::new(
+                "needSecret",
+                "Inserisci la password nel campo per provare la connessione.",
+            )
+        }
+        Err(e) => return TestResult::new("error", e),
+    };
+    let started = std::time::Instant::now();
+    match FtpFs::connect(params).await {
+        Ok(fs) => match fs.list("/").await {
+            Ok(_) => {
+                let mut r = TestResult::new("ok", "Connessione e autenticazione riuscite.");
+                r.elapsed_ms = u64::try_from(started.elapsed().as_millis()).ok();
+                r
+            }
+            Err(e) => TestResult::new("error", e.to_string()),
+        },
+        Err(pxt_fs::FsError::UntrustedCertificate {
+            fingerprint,
+            changed,
+        }) => {
+            let mut r = TestResult::new(
+                if changed {
+                    "hostKeyChanged"
+                } else {
+                    "unknownHostKey"
+                },
+                if changed {
+                    "Il certificato del server è diverso da quello che avevi accettato."
+                } else {
+                    "Il certificato del server non è verificabile. Apri la sessione una volta per vederne l'impronta e accettarla."
+                },
+            );
+            r.key_type = Some("certificato TLS".into());
+            r.fingerprint = Some(fingerprint);
+            r
+        }
+        Err(e) => TestResult::new("error", e.to_string()),
+    }
+}
+
+/// Policy attiva e l'eventuale avviso (file non valido): la UI vi si adegua (per esempio nasconde l'FTP in chiaro).
+#[tauri::command]
+fn policy_get(state: Shared<'_>) -> serde_json::Value {
+    serde_json::json!({
+        "policy": state.policy,
+        "warning": state.policy_warning,
+    })
+}
+
 /// Sessione SFTP della connessione: la apre al primo uso (nessuna seconda autenticazione).
-async fn sftp_for(state: &AppState, id: u64) -> Result<Arc<SftpFs>, String> {
+async fn sftp_for(state: &AppState, id: u64) -> Result<Arc<AnyFs>, String> {
     let mut open = state.sftp.lock().await;
     if let Some(fs) = open.get(&id) {
         return Ok(Arc::clone(fs));
@@ -927,7 +1162,7 @@ async fn sftp_for(state: &AppState, id: u64) -> Result<Arc<SftpFs>, String> {
                 .map_err(err)?
         }
     };
-    let fs = Arc::new(SftpFs::connect(stream).await.map_err(err)?);
+    let fs = Arc::new(AnyFs::Sftp(SftpFs::connect(stream).await.map_err(err)?));
     open.insert(id, Arc::clone(&fs));
     Ok(fs)
 }
@@ -946,6 +1181,10 @@ async fn sftp_home(state: Shared<'_>, id: u64) -> Result<String, String> {
 #[tauri::command]
 async fn sftp_id_names(state: Shared<'_>, id: u64) -> Result<pxt_fs::names::IdNames, String> {
     let fs = sftp_for(&state, id).await?;
+    // Via FTP non c'è `/etc/passwd` da leggere in modo affidabile: i nomi arrivano già dall'elenco.
+    if matches!(*fs, AnyFs::Ftp(_)) {
+        return Ok(pxt_fs::names::IdNames::default());
+    }
     Ok(pxt_fs::names::load(&*fs).await)
 }
 
@@ -1724,7 +1963,7 @@ struct JobRecord {
 /// Avvia (o riavvia) l'esecuzione di un lavoro e restituisce il suo id.
 fn launch(
     state: &Arc<AppState>,
-    fs: Arc<SftpFs>,
+    fs: Arc<AnyFs>,
     record: JobRecord,
     on_event: Channel<TransferEvent>,
 ) -> u64 {
@@ -2018,6 +2257,7 @@ fn known_hosts_remove(state: Shared<'_>, host: String, port: u16) -> Result<usiz
         port,
         user: String::new(),
         via: Vec::new(),
+        protocol: "ssh",
     };
     state.audit(
         &ctx,
@@ -2053,6 +2293,8 @@ pub fn run() {
             session_duplicate,
             ssh_connect,
             sftp_connect,
+            ftp_connect,
+            policy_get,
             ssh_write,
             ssh_resize,
             ssh_close,
@@ -2145,6 +2387,66 @@ mod tests {
         stop.store(true, Ordering::Relaxed);
         task.join().unwrap();
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn temp_state(policy_json: Option<&str>) -> AppState {
+        let n = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("pxt-app-{}-{n}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        if let Some(j) = policy_json {
+            std::fs::write(dir.join("policy.json"), j).unwrap();
+        }
+        AppState::new(dir)
+    }
+
+    fn ftp_session(security: pxt_core::FtpSecurity) -> Session {
+        let mut s = Session::new_ssh("f", "ftp.example", 21, "test");
+        s.protocol = Protocol::Ftp;
+        s.ftp.security = security;
+        s
+    }
+
+    #[test]
+    fn plain_ftp_is_refused_when_the_policy_forbids_it() {
+        let open = temp_state(None);
+        let strict = temp_state(Some(r#"{"allowPlainFtp": false}"#));
+        let plain = ftp_session(pxt_core::FtpSecurity::Plain);
+        let tls = ftp_session(pxt_core::FtpSecurity::Explicit);
+        assert!(ftp_policy_check(&open, &plain).is_ok());
+        assert!(ftp_policy_check(&strict, &plain)
+            .unwrap_err()
+            .contains("policy"));
+        // FTPS resta consentito.
+        assert!(ftp_policy_check(&strict, &tls).is_ok());
+        assert!(ftp_policy_check(&strict, &ftp_session(pxt_core::FtpSecurity::Implicit)).is_ok());
+        // Un elenco di protocolli che non include FTP lo vieta del tutto.
+        let no_ftp = temp_state(Some(r#"{"allowedProtocols": ["ssh", "sftp"]}"#));
+        assert!(ftp_policy_check(&no_ftp, &tls).is_err());
+        // Un file danneggiato non allarga i permessi.
+        let broken = temp_state(Some("{ rotto"));
+        assert!(broken.policy_warning.is_some());
+        assert!(ftp_policy_check(&broken, &plain).is_err());
+    }
+
+    #[test]
+    fn ftp_needs_a_password_except_for_anonymous_access() {
+        let st = temp_state(None);
+        let mut s = ftp_session(pxt_core::FtpSecurity::Explicit);
+        let params = |pw: Option<&str>, s: &Session| {
+            tauri::async_runtime::block_on(ftp_params(&st, s, pw.map(String::from), None))
+        };
+        assert_eq!(params(None, &s).err().as_deref(), Some(PASSWORD_REQUIRED));
+        assert_eq!(params(Some("pw"), &s).unwrap().password, "pw");
+        s.username = "Anonymous".into();
+        assert_eq!(params(None, &s).unwrap().password, "anonymous@");
+        // L'impronta accettata ora ha la precedenza su quella salvata.
+        s.ftp.pinned_cert = Some("AA".into());
+        let p =
+            tauri::async_runtime::block_on(ftp_params(&st, &s, None, Some("BB".into()))).unwrap();
+        assert_eq!(p.pinned_cert.as_deref(), Some("BB"));
     }
 
     #[test]

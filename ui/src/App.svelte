@@ -170,7 +170,7 @@
   }
 
   function openSession(s: Session) {
-    if (s.protocol === 'sftp') openSftpTab(s)
+    if (s.protocol === 'sftp' || s.protocol === 'ftp') openSftpTab(s)
     else openTab(s.name, { sessionId: s.id })
   }
 
@@ -180,10 +180,29 @@
     activeKey = tab.key
   }
 
-  /** Dati di una sessione SFTP salvata (cartella iniziale, file nascosti). */
+  /** Dati di una sessione SFTP o FTP salvata (cartella iniziale, file nascosti). */
   function sftpOptions(sessionId: Uuid | undefined) {
     const n = sessionId ? nodes.find((x) => x.id === sessionId) : undefined
-    return n?.type === 'session' ? n.sftp : null
+    if (n?.type !== 'session') return null
+    return n.protocol === 'ftp' ? n.ftp : n.sftp
+  }
+
+  const sessionProtocol = (sessionId: Uuid | undefined) => {
+    const n = sessionId ? nodes.find((x) => x.id === sessionId) : undefined
+    return n?.type === 'session' ? n.protocol : 'ssh'
+  }
+
+  /** Salva nella sessione FTP l'impronta del certificato che l'utente ha accettato. */
+  function certPinner(sessionId: Uuid) {
+    return async (fingerprint: string) => {
+      const n = nodes.find((x) => x.id === sessionId)
+      if (n?.type === 'session') {
+        const copy = $state.snapshot(n) as Session
+        copy.ftp = { ...copy.ftp, pinnedCert: fingerprint }
+        await saveNode(copy, null, false)
+        await reload()
+      }
+    }
   }
 
   function quickConnect(e: Event) {
@@ -217,7 +236,11 @@
   function pickProtocol(protocol: Protocol) {
     const parentId = picking?.parentId ?? null
     picking = null
-    editing = { session: newSession(parentId, protocol === 'sftp' ? 'sftp' : 'ssh'), isNew: true }
+    const kind = protocol === 'sftp' || protocol === 'ftp' ? protocol : 'ssh'
+    const s = newSession(parentId, kind)
+    // FTP: porta abituale del tipo di protezione predefinito (FTPS esplicito, 21).
+    if (kind === 'ftp') s.port = 21
+    editing = { session: s, isNew: true }
   }
 
   async function saveSession(s: Session, password: string | null, clearPassword: boolean) {
@@ -366,6 +389,9 @@
           <SftpTab
             target={tab.target}
             active={tab.key === activeKey}
+            protocol={sessionProtocol(tab.target.sessionId) === 'ftp' ? 'ftp' : 'sftp'}
+            plainFtp={sessionProtocol(tab.target.sessionId) === 'ftp' && (nodes.find((x) => x.id === tab.target.sessionId) as Session | undefined)?.ftp.security === 'plain'}
+            onpincert={tab.target.sessionId ? certPinner(tab.target.sessionId) : undefined}
             startPath={sftpOptions(tab.target.sessionId)?.startPath ?? null}
             showHidden={sftpOptions(tab.target.sessionId)?.showHidden ?? false}
             sessionName={tab.title}
