@@ -22,6 +22,7 @@ Current release: **0.1.0-beta.1** (Windows only, unsigned). See the [changelog](
 - **Built-in text editor** (right-click → Edit, or double-click): CodeMirror 6 with syntax highlighting, search and replace, encoding and line-ending preservation, concurrent-modification check, 5 MiB limit. The content stays in memory, no temporary files on disk
 - "Open with system program" for any file up to 100 MiB (PDFs, images, spreadsheets...): a temporary copy is opened with the program the system associates, and saving it offers to upload it back. Scripts and executables are refused (use the built-in editor)
 - The panel shows the name and colour of the active SSH session
+- The file panel always works as the user you logged in with: after `su` or `sudo su -` in the terminal it follows the folder you are in, but file access keeps your login user's permissions
 
 **Sessions and settings**
 - Tree of folders and sessions with filter, drag and drop, duplicate; "New session" dialog with protocol picker (SSH and SFTP are available)

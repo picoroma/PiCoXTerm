@@ -203,7 +203,6 @@ In ordine di valore stimato, da ripriorizzare dopo l'uso reale:
 |---|---|
 | RDP integrato con **IronRDP** in una scheda | Spike dedicato (prestazioni, NLA, clipboard) |
 | Scrittura su RDM (crea/modifica voci) | Dopo la CLI ufficiale |
-| **SFTP via sudo** (sftp-server avviato con `sudo -u <sid>adm`) | Molto utile per SAP Basis; da valutare la sicurezza |
 | MultiExec (stesso input su più schede) | Con conferma esplicita |
 | Port forwarding locale singolo | Solo se la domanda aperta 4 delle specifiche lo conferma; controllato da policy |
 | **X11 forwarding** verso X server esterno (fase 1 di 6.7) | Per SAPinst, `hdbsetup`, installer Oracle; per sessione, disattivato da policy e di default |
@@ -216,4 +215,3 @@ In ordine di valore stimato, da ripriorizzare dopo l'uso reale:
 | Snippet di comandi salvati | Per esempio comandi Basis frequenti |
 | **Colonne ridimensionabili** nei file browser (nome, dimensione, data, permessi, utente, gruppo) | Trascinando il bordo dell'intestazione; larghezze ricordate. Richiesta dell'utente (2026-10-17) |
 | Preferiti (cartelle preferite) nei file browser | Punto 4 di M2 non realizzato |
-| **Vista dei file con le credenziali di un altro utente** dopo `sudo su -` | Vedi "SFTP via sudo": oggi il pannello SFTP resta con l'utente del login SSH |
