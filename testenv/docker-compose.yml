@@ -44,3 +44,12 @@ services:
     ports:
       - "127.0.0.1:2121:21"
       - "127.0.0.1:30000-30009:30000-30009"
+
+  # Server FTPS IMPLICITO (TLS subito) su 127.0.0.1:2990, certificato autofirmato, utente test/test.
+  # ProFTPD, passivo sulle porte 30010-30019. Contiene file di esempio (LEGGIMI.txt, Documenti, Immagini).
+  ftps:
+    build: ./ftps
+    container_name: pxt-test-ftps
+    ports:
+      - "127.0.0.1:2990:990"
+      - "127.0.0.1:30010-30019:30010-30019"

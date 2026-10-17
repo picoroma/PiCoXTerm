@@ -221,6 +221,91 @@ fn entry_from(dir: &str, f: &ListedFile) -> Entry {
     }
 }
 
+/// Giorni dal 1970 per una data del calendario (algoritmo di Howard Hinnant).
+fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = y.div_euclid(400);
+    let yoe = y.rem_euclid(400);
+    let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146_097 + doe - 719_468
+}
+
+/// `YYYYMMDDHHMMSS[.sss]` (UTC) -> secondi dal 1970.
+fn parse_mlsx_time(v: &str) -> Option<i64> {
+    let digits = v.split('.').next()?;
+    if digits.len() < 14 || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let n = |r: std::ops::Range<usize>| digits[r].parse::<i64>().ok();
+    let days = days_from_civil(n(0..4)?, n(4..6)?, n(6..8)?);
+    Some(days * 86_400 + n(8..10)? * 3600 + n(10..12)? * 60 + n(12..14)?)
+}
+
+/// Una riga di `MLSD`/`MLST`: `fatto=valore;fatto=valore; nome`. A differenza del parser della libreria
+/// accetta le cartelle senza dimensione e legge anche i fatti Unix (permessi, proprietario, gruppo).
+/// Restituisce `None` per `cdir` e `pdir` (le voci `.` e `..`) e per le righe che non si capiscono.
+fn parse_mlsx(dir: &str, line: &str) -> Option<Entry> {
+    let line = line.trim_start();
+    let (facts, name) = line.split_once(' ')?;
+    // MLST può rispondere con il percorso intero: il nome è l'ultima parte.
+    let name = name
+        .rsplit('/')
+        .next()
+        .filter(|n| !n.is_empty())
+        .unwrap_or(name);
+    if name.is_empty() || name == "." || name == ".." {
+        return None;
+    }
+    let mut kind = None;
+    let mut size = 0u64;
+    let mut modified = None;
+    let mut mode = None;
+    let (mut uid, mut gid, mut owner, mut group) = (None, None, None, None);
+    let mut is_symlink = false;
+    for fact in facts.split(';').filter(|f| !f.is_empty()) {
+        let (key, value) = fact.split_once('=')?;
+        match key.to_ascii_lowercase().as_str() {
+            "type" => {
+                let v = value.to_ascii_lowercase();
+                kind = match v.as_str() {
+                    "file" => Some(EntryKind::File),
+                    "dir" => Some(EntryKind::Dir),
+                    "cdir" | "pdir" => return None,
+                    // `OS.unix=slink:/destinazione` e simili: un collegamento simbolico.
+                    v if v.starts_with("os.unix=slink") || v.starts_with("os.unix=symlink") => {
+                        is_symlink = true;
+                        Some(EntryKind::Other)
+                    }
+                    _ => Some(EntryKind::Other),
+                };
+            }
+            "size" | "sizd" => size = value.parse().unwrap_or(0),
+            "modify" => modified = parse_mlsx_time(value),
+            "unix.mode" => mode = u32::from_str_radix(value, 8).ok().map(|m| m & 0o7777),
+            "unix.uid" | "unix.owner" => uid = value.parse().ok(),
+            "unix.gid" | "unix.group" => gid = value.parse().ok(),
+            "unix.ownername" => owner = Some(value.to_string()),
+            "unix.groupname" => group = Some(value.to_string()),
+            _ => {}
+        }
+    }
+    let kind = kind?;
+    Some(Entry {
+        name: name.to_string(),
+        path: join(dir, name),
+        kind,
+        is_symlink,
+        size: if kind == EntryKind::Dir { 0 } else { size },
+        modified,
+        mode,
+        owner,
+        group,
+        uid,
+        gid,
+    })
+}
+
 impl FtpFs {
     /// Si collega, autentica e verifica il server. Con FTPS e un certificato che non passa la verifica
     /// né corrisponde al pin, restituisce `FsError::UntrustedCertificate` con l'impronta da mostrare.
@@ -331,6 +416,10 @@ async fn open_conn(inner: &Inner) -> Result<Conn> {
                 )
                 .await?;
                 f.login(&p.username, &p.password).await?;
+                // Con TLS implicito la libreria non protegge da sola i canali dei dati (lo fa solo con
+                // `AUTH TLS`): lo si chiede esplicitamente, altrimenti il server rifiuta con 522.
+                f.custom_command("PBSZ 0", &[Status::CommandOk]).await?;
+                f.custom_command("PROT P", &[Status::CommandOk]).await?;
                 f.transfer_type(suppaftp::types::FileType::Binary).await?;
                 Ok(Conn::Tls(f))
             }
@@ -515,17 +604,19 @@ impl RemoteFs for FtpFs {
         let mut seen = HashSet::new();
         let mut out = Vec::new();
         for line in lines {
-            let parsed = if mlsx {
-                ListParser::parse_mlsd(&line)
+            let entry = if mlsx {
+                parse_mlsx(path, &line)
             } else {
-                ListParser::parse_posix(&line).or_else(|_| ListParser::parse_dos(&line))
+                ListParser::parse_posix(&line)
+                    .or_else(|_| ListParser::parse_dos(&line))
+                    .ok()
+                    .filter(|f| !matches!(f.name(), "" | "." | ".."))
+                    .map(|f| entry_from(path, &f))
             };
-            let Ok(file) = parsed else { continue };
-            let name = file.name();
-            if name.is_empty() || name == "." || name == ".." || !seen.insert(name.to_string()) {
-                continue;
+            let Some(entry) = entry else { continue };
+            if seen.insert(entry.name.clone()) {
+                out.push(entry);
             }
-            out.push(entry_from(path, &file));
         }
         // Un collegamento simbolico si comporta come la cosa a cui punta: lo si verifica con un tentativo.
         for e in out.iter_mut().filter(|e| e.is_symlink) {
@@ -567,9 +658,7 @@ impl RemoteFs for FtpFs {
             let mut l = self.lease().await?;
             match on!(l.conn(), f => f.mlst(Some(path)).await) {
                 Ok(line) => {
-                    if let Ok(file) = ListParser::parse_mlst(&line) {
-                        let mut e = entry_from(dir, &file);
-                        // MLST può rispondere con il percorso intero: il nome è l'ultima parte.
+                    if let Some(mut e) = parse_mlsx(dir, &line) {
                         e.name = name.to_string();
                         e.path = norm.clone();
                         return Ok(e);
@@ -706,6 +795,51 @@ mod tests {
         assert_eq!(normalize(""), "/");
         assert_eq!(join("/a", "b"), "/a/b");
         assert_eq!(join("/", "b"), "/b");
+    }
+
+    #[test]
+    fn mlsx_lines_from_real_servers_are_parsed() {
+        // ProFTPD: le cartelle non hanno `size`; nomi e id Unix.
+        let d = parse_mlsx(
+            "/home",
+            "modify=20261017120422;perm=flcdmpe;type=dir;unique=64U57632;UNIX.group=1000;UNIX.groupname=sapsys;UNIX.mode=02755;UNIX.owner=1000;UNIX.ownername=sapadm; Documenti",
+        )
+        .unwrap();
+        assert_eq!(
+            (d.name.as_str(), d.kind, d.size),
+            ("Documenti", EntryKind::Dir, 0)
+        );
+        assert_eq!(d.path, "/home/Documenti");
+        assert_eq!(d.mode, Some(0o2755));
+        assert_eq!(
+            (d.owner.as_deref(), d.group.as_deref()),
+            (Some("sapadm"), Some("sapsys"))
+        );
+        assert_eq!((d.uid, d.gid), (Some(1000), Some(1000)));
+        assert_eq!(d.modified, Some(1_792_238_662));
+
+        // pure-ftpd: file con dimensione, nome con spazi e punto e virgola.
+        let f = parse_mlsx(
+            "/",
+            "type=file;size=1234;modify=20240229235959; mio file; v2.txt",
+        )
+        .unwrap();
+        assert_eq!(
+            (f.name.as_str(), f.size, f.kind),
+            ("mio file; v2.txt", 1234, EntryKind::File)
+        );
+        assert_eq!(f.modified, Some(1_709_251_199));
+        assert_eq!(f.mode, None);
+
+        // Collegamento simbolico e voci da ignorare.
+        let l = parse_mlsx("/", "type=OS.unix=slink:/etc;size=4; etc-link").unwrap();
+        assert!(l.is_symlink);
+        assert!(parse_mlsx("/", "type=cdir;modify=20240101000000; .").is_none());
+        assert!(parse_mlsx("/", "type=pdir;modify=20240101000000; ..").is_none());
+        assert!(parse_mlsx("/", "senza fatti").is_none());
+        // MLST con il percorso intero.
+        let m = parse_mlsx("/a", " type=file;size=5; /a/b/c.txt").unwrap();
+        assert_eq!(m.name, "c.txt");
     }
 
     #[test]

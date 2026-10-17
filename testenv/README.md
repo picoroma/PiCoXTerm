@@ -13,10 +13,18 @@ Ascolta su `127.0.0.1:2222`. Utente `test`, password `test`. Accetta anche le ch
 ## Server FTP e FTPS
 
 ```
-docker compose up -d ftp
+docker compose up -d ftp ftps
+powershell -ExecutionPolicy Bypass -File testenv/seed-ftp.ps1    # file di esempio (una volta)
 ```
 
-Ascolta su `127.0.0.1:2121` (utente `test`, password `test`), modo passivo sulle porte 30000-30009, TLS esplicito opzionale con certificato **autofirmato** generato all'avvio (la prima volta serve qualche decina di secondi). Prove: `cargo test -p pxt-fs --test ftp_e2e -- --ignored --test-threads=1`.
+| Servizio | Indirizzo | Protocollo | Software |
+|---|---|---|---|
+| `ftp` | `127.0.0.1:2121` | FTP in chiaro **e** FTPS esplicito (`AUTH TLS`) | pure-ftpd |
+| `ftps` | `127.0.0.1:2990` | FTPS **implicito** (TLS subito) | ProFTPD |
+
+Utente `test`, password `test`, modo passivo (porte 30000-30009 per `ftp`, 30010-30019 per `ftps`), tutto solo su loopback. I certificati TLS sono **autofirmati** e generati all'avvio: il primo accesso deve chiedere di fidarsi dell'impronta (pin); `ftp` impiega qualche decina di secondi a generarlo. Il server `ftps` contiene già `LEGGIMI.txt`, `Documenti` e `Immagini`; `ftp` si popola con lo script.
+
+Prove automatiche (usano entrambi): `cargo test -p pxt-fs --test ftp_e2e -- --ignored --test-threads=1`.
 
 ## Server con più shell
 

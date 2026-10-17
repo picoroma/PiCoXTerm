@@ -499,3 +499,67 @@ async fn paused_download_resumes_with_rest_over_ftps() {
     );
     env.cleanup().await;
 }
+
+#[tokio::test]
+#[ignore = "richiede il servizio ftps (TLS implicito) di testenv"]
+async fn implicit_ftps_needs_a_pin_then_lists_and_transfers() {
+    let implicit = |pinned| FtpParams {
+        port: 2990,
+        ..params(FtpSecurity::Implicit, pinned)
+    };
+    let fp = match FtpFs::connect(implicit(None)).await {
+        Err(FsError::UntrustedCertificate {
+            fingerprint,
+            changed,
+        }) => {
+            assert!(!changed);
+            fingerprint
+        }
+        other => panic!(
+            "atteso un certificato non attendibile, ottenuto {:?}",
+            other.err()
+        ),
+    };
+    let fs = FtpFs::connect(implicit(Some(fp)))
+        .await
+        .expect("con il pin deve collegarsi");
+
+    let names: Vec<String> = fs
+        .list("/")
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|e| e.name)
+        .collect();
+    for expected in ["LEGGIMI.txt", "Documenti", "Immagini"] {
+        assert!(
+            names.contains(&expected.to_string()),
+            "{expected} manca: {names:?}"
+        );
+    }
+
+    // Scarica un file di esempio e ne carica uno nuovo, con il motore.
+    let local = std::env::temp_dir().join(format!("pxt-ftps-{}", nanos()));
+    std::fs::create_dir_all(&local).unwrap();
+    let plan = plan_download(&fs, &["/LEGGIMI.txt".to_string()], &local)
+        .await
+        .unwrap();
+    run(&fs, &plan, &Control::new(), &JobState::new(&plan), 2)
+        .await
+        .unwrap();
+    assert!(std::fs::read_to_string(local.join("LEGGIMI.txt"))
+        .unwrap()
+        .contains("FTPS"));
+
+    let up = local.join("da-caricare.txt");
+    std::fs::write(&up, "caricato dal test").unwrap();
+    let plan = plan_upload(&fs, std::slice::from_ref(&up), "/")
+        .await
+        .unwrap();
+    run(&fs, &plan, &Control::new(), &JobState::new(&plan), 2)
+        .await
+        .unwrap();
+    assert_eq!(fs.stat("/da-caricare.txt").await.unwrap().size, 17);
+    fs.remove_file("/da-caricare.txt").await.unwrap();
+    let _ = std::fs::remove_dir_all(&local);
+}
