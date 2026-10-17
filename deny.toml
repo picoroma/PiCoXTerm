@@ -15,6 +15,9 @@ version = 2
 # a ogni aggiornamento delle dipendenze.
 ignore = [
     { id = "RUSTSEC-2023-0071", reason = "Marvin attack sul crate rsa (usato da russh per le chiavi RSA). Nessuna versione corretta esiste. Rischio accettato (D-18): servono osservazioni di timing dell'operazione con chiave privata RSA; mitigazione: preferire chiavi ed25519/ECDSA" },
+    { id = "RUSTSEC-2026-0370", reason = "zvariant non più mantenuto (annuncio z-galaxy/zbus#2043). Solo su Linux: client del Secret Service (keyring) per le password; non è una vulnerabilità. Rischio accettato (D-27): da rivedere quando keyring passa a una versione che lo sostituisce" },
+    { id = "RUSTSEC-2026-0371", reason = "zbus_names non più mantenuto (annuncio z-galaxy/zbus#2043). Solo su Linux: client del Secret Service (keyring) per le password; non è una vulnerabilità. Rischio accettato (D-27): da rivedere quando keyring passa a una versione che lo sostituisce" },
+    { id = "RUSTSEC-2026-0372", reason = "zvariant_derive non più mantenuto (annuncio z-galaxy/zbus#2043). Solo su Linux: client del Secret Service (keyring) per le password; non è una vulnerabilità. Rischio accettato (D-27): da rivedere quando keyring passa a una versione che lo sostituisce" },
     { id = "RUSTSEC-2024-0370", reason = "proc-macro-error non mantenuto: dipendenza di compilazione della catena GTK/Tauri su Linux, non presente nell'eseguibile" },
 ]
 
