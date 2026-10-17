@@ -157,3 +157,18 @@ async fn sftp_only_connection_works_without_a_shell_and_through_a_jump_host() {
     conn.close().await;
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[tokio::test]
+#[ignore = "richiede il container di testenv"]
+async fn owner_and_group_names_come_from_etc_passwd_and_group() {
+    let (fs, _shell, _events) = open_sftp().await;
+    let names = pxt_fs::names::load(&fs).await;
+    assert_eq!(names.users.get(&0).map(String::as_str), Some("root"));
+    assert!(names.groups.contains_key(&0), "{:?}", names.groups);
+    // La home dell'utente di prova ha un proprietario che si risolve in un nome.
+    let home = fs.canonicalize(".").await.unwrap();
+    let entry = fs.stat(&home).await.unwrap();
+    let uid = entry.uid.expect("uid");
+    println!("home {home}: uid {uid} -> {:?}", names.users.get(&uid));
+    assert!(names.users.contains_key(&uid));
+}

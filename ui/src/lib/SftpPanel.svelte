@@ -86,7 +86,7 @@
     seq: number
   }
 
-  type SortKey = 'name' | 'size' | 'modified'
+  type SortKey = 'name' | 'size' | 'modified' | 'owner' | 'group'
 
   /** Limite dell'editor integrato (lo stesso del backend, `MAX_EDIT_BYTES`). */
   const MAX_EDIT_BYTES = 5 * 1024 * 1024
@@ -116,6 +116,15 @@
 
   const cur = $derived(connId !== null ? states[connId] : undefined)
   const isLocal = $derived(kind === 'local')
+
+  // Nomi di utenti e gruppi (il protocollo comunica solo gli id), letti una volta per connessione.
+  let idNames = $state<{ users: Record<string, string>; groups: Record<string, string> }>({ users: {}, groups: {} })
+  const ownerOf = (e: SftpEntry) => e.owner ?? (e.uid !== null ? (idNames.users[e.uid] ?? String(e.uid)) : '')
+  const groupOf = (e: SftpEntry) => e.group ?? (e.gid !== null ? (idNames.groups[e.gid] ?? String(e.gid)) : '')
+
+  /** Colonne di permessi, utente e gruppo: di norma visibili quando c'è spazio (pannello grande o largo). */
+  let detailsChoice = $state<boolean | null>(null)
+  const details = $derived(!isLocal && (detailsChoice ?? (standalone || wide)))
   /** Doppio pannello: il pannello remoto scarica nel pannello locale, senza chiedere la cartella. */
   const dual = $derived(localDir !== undefined)
 
@@ -160,6 +169,8 @@
       let r = 0
       if (sortKey === 'size') r = a.size - b.size
       else if (sortKey === 'modified') r = (a.modified ?? 0) - (b.modified ?? 0)
+      else if (sortKey === 'owner') r = ownerOf(a).localeCompare(ownerOf(b), undefined, { numeric: true })
+      else if (sortKey === 'group') r = groupOf(a).localeCompare(groupOf(b), undefined, { numeric: true })
       if (r === 0) r = a.name.localeCompare(b.name, undefined, { sensitivity: 'base', numeric: true })
       return r * dir
     })
@@ -202,6 +213,11 @@
     try {
       // Se il terminale ha già comunicato la directory corrente si parte da lì, altrimenti dalla home.
       // (`cwd` si legge dopo l'attesa: nel frattempo il terminale può aver cambiato directory.)
+      if (kind === 'remote') {
+        invoke<{ users: Record<string, string>; groups: Record<string, string> }>('sftp_id_names', { id })
+          .then((n) => (idNames = n))
+          .catch(() => {})
+      }
       const home = await rpc<string>('home', {}, id)
       if (kind === 'local') {
         // Si riparte dall'ultima cartella usata, se esiste ancora.
@@ -376,7 +392,8 @@
   /** Descrizione al passaggio del mouse: nome, permessi e proprietario. */
   function rowTooltip(e: SftpEntry): string {
     const perms = modeString(e)
-    const who = e.owner ? `${e.owner}${e.group ? ':' + e.group : ''}` : ''
+    const o = ownerOf(e)
+    const who = o ? `${o}${groupOf(e) ? ':' + groupOf(e) : ''}` : ''
     return [e.name, perms && who ? `${perms}  ${who}` : perms || who].filter(Boolean).join('\n')
   }
 
@@ -777,6 +794,9 @@
         onclick={() => (follow = !follow)}><Icon name={follow ? 'lock' : 'unlock'} /></button
       >
       {/if}
+      {#if !isLocal}
+        <button type="button" class:on={details} aria-pressed={details} title={t('showDetails')} aria-label={t('showDetails')} onclick={() => (detailsChoice = !details)}><Icon name="columns" /></button>
+      {/if}
       <button type="button" class:on={showHidden} aria-pressed={showHidden} title={t('showHidden')} aria-label={t('showHidden')} onclick={() => (showHidden = !showHidden)}><Icon name={showHidden ? 'eye' : 'eye-off'} /></button>
       {#if onwiden}
         <button type="button" class:on={wide} aria-pressed={wide} title={wide ? t('narrow') : t('widen')} aria-label={wide ? t('narrow') : t('widen')} onclick={onwiden}><Icon name="arrows-h" /></button>
@@ -814,10 +834,15 @@
       </div>
     {/if}
 
-    <div class="cols" role="row">
+    <div class="cols" class:details role="row">
       <button type="button" class="c-name" onclick={() => sortBy('name')}>{t('name')}{sortKey === 'name' ? (sortAsc ? ' ▲' : ' ▼') : ''}</button>
       <button type="button" class="c-size" onclick={() => sortBy('size')}>{t('size')}{sortKey === 'size' ? (sortAsc ? ' ▲' : ' ▼') : ''}</button>
       <button type="button" class="c-date" onclick={() => sortBy('modified')}>{t('modified')}{sortKey === 'modified' ? (sortAsc ? ' ▲' : ' ▼') : ''}</button>
+      {#if details}
+        <span class="c-perm">{t('permissions')}</span>
+        <button type="button" class="c-user" onclick={() => sortBy('owner')}>{t('owner')}{sortKey === 'owner' ? (sortAsc ? ' ▲' : ' ▼') : ''}</button>
+        <button type="button" class="c-group" onclick={() => sortBy('group')}>{t('group')}{sortKey === 'group' ? (sortAsc ? ' ▲' : ' ▼') : ''}</button>
+      {/if}
     </div>
 
     {#if actionError}
@@ -828,6 +853,7 @@
       {#each rows as e (e.path)}
         <div
           class="row"
+          class:details
           class:selected={selection.has(e.path)}
           role="option"
           aria-selected={selection.has(e.path)}
@@ -842,6 +868,11 @@
           <span class="c-name"><span class="icon">{icon(e)}</span><span class="nm">{e.name}</span></span>
           <span class="c-size">{e.kind === 'dir' ? '' : formatSize(e.size)}</span>
           <span class="c-date">{formatDate(e.modified)}</span>
+          {#if details}
+            <span class="c-perm" title={modeString(e)}>{modeString(e)}</span>
+            <span class="c-user" title={ownerOf(e)}>{ownerOf(e)}</span>
+            <span class="c-group" title={groupOf(e)}>{groupOf(e)}</span>
+          {/if}
         </div>
       {/each}
       {#if cur.loading}
@@ -939,7 +970,7 @@
     oncancel={() => (dialog = null)}
   />
 {:else if dialog?.type === 'props' && connId !== null}
-  <PropertiesDialog entry={dialog.entry} {connId} {kind} onclose={() => (dialog = null)} onchanged={refreshCurrent} />
+  <PropertiesDialog entry={dialog.entry} {connId} {kind} names={idNames} onclose={() => (dialog = null)} onchanged={refreshCurrent} />
 {/if}
 
 <style>
@@ -1004,6 +1035,22 @@
   .filter {
     width: calc(100% - 16px);
     margin: 0 8px 6px;
+  }
+  .cols.details,
+  .row.details {
+    grid-template-columns: minmax(0, 1fr) 64px 118px 84px 74px 74px;
+  }
+  .c-perm,
+  .c-user,
+  .c-group {
+    font-size: 11px;
+    color: var(--fg-dim);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .c-perm {
+    font-family: Consolas, monospace;
   }
   .cols,
   .row {

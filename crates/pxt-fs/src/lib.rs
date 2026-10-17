@@ -7,6 +7,7 @@ mod entry;
 mod error;
 pub mod external;
 pub mod local;
+pub mod names;
 pub mod ops;
 mod sftp;
 pub mod transfer;

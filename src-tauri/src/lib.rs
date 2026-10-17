@@ -942,6 +942,13 @@ async fn sftp_home(state: Shared<'_>, id: u64) -> Result<String, String> {
         .map_err(err)
 }
 
+/// Nomi di utenti e gruppi per gli id numerici, letti da `/etc/passwd` e `/etc/group` del server.
+#[tauri::command]
+async fn sftp_id_names(state: Shared<'_>, id: u64) -> Result<pxt_fs::names::IdNames, String> {
+    let fs = sftp_for(&state, id).await?;
+    Ok(pxt_fs::names::load(&*fs).await)
+}
+
 /// Contenuto di una cartella remota.
 #[tauri::command]
 async fn sftp_list(state: Shared<'_>, id: u64, path: String) -> Result<Vec<Entry>, String> {
@@ -2057,6 +2064,7 @@ pub fn run() {
             sftp_rename,
             sftp_mkdir,
             sftp_read_text,
+            sftp_id_names,
             local_home,
             local_list,
             local_delete,

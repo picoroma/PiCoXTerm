@@ -21,6 +21,7 @@
     entry,
     connId,
     kind = 'remote',
+    names,
     onclose,
     onchanged,
   }: {
@@ -28,6 +29,8 @@
     connId: number
     /** `local`: l'elemento sta sul disco del computer (comandi `local_*`, senza connessione). */
     kind?: 'remote' | 'local'
+    /** Nomi di utenti e gruppi per gli id numerici (letti dal server). */
+    names?: { users: Record<string, string>; groups: Record<string, string> }
     onclose: () => void
     /** Chiamata dopo una modifica dei permessi, per aggiornare l'elenco. */
     onchanged: () => void
@@ -109,7 +112,10 @@
 
   const date = (secs: number | null) => (secs === null ? '—' : new Date(secs * 1000).toLocaleString())
   const owner = $derived(
-    [entry.owner ?? (entry.uid !== null ? String(entry.uid) : null), entry.group ?? (entry.gid !== null ? String(entry.gid) : null)]
+    [
+      entry.owner ?? (entry.uid !== null ? (names?.users[entry.uid] ?? String(entry.uid)) : null),
+      entry.group ?? (entry.gid !== null ? (names?.groups[entry.gid] ?? String(entry.gid)) : null),
+    ]
       .filter((x) => x !== null)
       .join(' : ') || '—',
   )

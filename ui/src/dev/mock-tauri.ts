@@ -43,7 +43,8 @@ const fakeFs: Record<string, any[]> = {
   '/': [d('home', '/'), d('etc', '/'), d('usr', '/'), d('var', '/')],
   '/home': [d('u', '/home')],
   '/home/u': [d('projects', '/home/u'), d('.config', '/home/u'), f('notes.txt', '/home/u', 1234), f('big.iso', '/home/u', 5_000_000_000), f('.bashrc', '/home/u', 220), f('Zeta.log', '/home/u', 90), f('alpha.log', '/home/u', 20_000), d('link-to-etc', '/home/u', { isSymlink: true })],
-  '/home/u/projects': [f('main.rs', '/home/u/projects', 800), d('src', '/home/u/projects')],
+  // Qui il server comunica solo gli id (come OpenSSH): i nomi si risolvono con `sftp_id_names`.
+  '/home/u/projects': [f('main.rs', '/home/u/projects', 800, { owner: null, group: null, uid: 1001, gid: 79 }), d('src', '/home/u/projects', { owner: null, group: null, uid: 4242, gid: 4242 })],
   '/home/u/projects/src': [],
   '/conflict': [f('a.txt', '/conflict', 10), f('b.log', '/conflict', 20)],
   '/etc': [f('passwd', '/etc', 1900), f('hosts', '/etc', 200), d('ssh', '/etc')],
@@ -212,6 +213,7 @@ const handlers: Record<string, (args: any) => unknown> = {
     ;(window as any).__lastSaved = { path, content }
     return { status: 'saved', size: c.size, modified: c.modified }
   },
+  sftp_id_names: () => ({ users: { '0': 'root', '1001': 'sapadm' }, groups: { '0': 'root', '79': 'sapsys' } }),
   // Disco locale finto (pannello locale del doppio pannello).
   local_home: () => 'C:\\Users\\mock\\Documents',
   local_list: ({ path }) => {
