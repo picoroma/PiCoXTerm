@@ -601,6 +601,7 @@
     <span class="spacer"></span>
     <span class="group" role="group" aria-label={t('terminal')}>
       <button type="button" title={t('cdHere')} aria-label={t('cdHere')} disabled={!cur} onclick={() => cur && void cdTerminal(cur.path)}><Icon name="terminal" /></button>
+      <button type="button" title={t('reinjectTracking')} aria-label={t('reinjectTracking')} disabled={!cur} onclick={onenabletracking}><Icon name="target" /></button>
     </span>
     <span class="group" role="group" aria-label={t('viewOptions')}>
       <button

@@ -17,6 +17,7 @@
     | 'plus'
     | 'info'
     | 'terminal'
+    | 'target'
     | 'folder-transfer'
     | 'swap'
     | 'cloud'
@@ -57,6 +58,7 @@
     plus: ['M12 5v14', 'M5 12h14'],
     info: ['M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20z', 'M12 16v-4', 'M12 8h.01'],
     terminal: ['M4 17l6-6-6-6', 'M12 19h8'],
+    target: ['M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20z', 'M12 16a4 4 0 1 0 0-8 4 4 0 0 0 0 8z', 'M12 12h.01'],
     'folder-transfer': [FOLDER, 'M8 14h8', 'M13 11l3 3-3 3'],
     swap: ['M7 10h14', 'M17 6l4 4-4 4', 'M17 18H3', 'M7 14l-4 4 4 4'],
     cloud: ['M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9z'],
