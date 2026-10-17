@@ -26,6 +26,14 @@ Utente `test`, password `test`, modo passivo (porte 30000-30009 per `ftp`, 30010
 
 Prove automatiche (usano entrambi): `cargo test -p pxt-fs --test ftp_e2e -- --ignored --test-threads=1`.
 
+## Server S3
+
+```
+docker compose up -d s3
+```
+
+Servizio `s3` (`127.0.0.1:9000`, RustFS: MinIO non ha più immagini pubbliche). Chiave di accesso `pxtaccess`, chiave segreta `pxtsecret-1234`, indirizzi *path-style*, regione qualsiasi (`us-east-1`). Solo credenziali di prova, solo loopback. Prove automatiche: `cargo test -p pxt-fs --test s3_e2e -- --ignored --test-threads=1`.
+
 ## Server con più shell
 
 Servizio `ssh-shells` (porta 2223): utenti `bashuser`, `zshuser`, `tcshuser`, `ashuser` (password `test`); `bashuser` può usare `sudo`.

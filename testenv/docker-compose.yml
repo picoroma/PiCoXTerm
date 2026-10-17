@@ -53,3 +53,15 @@ services:
     ports:
       - "127.0.0.1:2990:990"
       - "127.0.0.1:30010-30019:30010-30019"
+
+  # Server S3 compatibile per le prove di S3 (RustFS: le immagini pubbliche di MinIO non esistono più).
+  # API su 127.0.0.1:9000, credenziali fittizie, solo su loopback. Stesso protocollo di AWS S3:
+  # per l'app è un "endpoint personalizzato".
+  s3:
+    image: rustfs/rustfs:latest
+    container_name: pxt-test-s3
+    environment:
+      - RUSTFS_ACCESS_KEY=pxtaccess
+      - RUSTFS_SECRET_KEY=pxtsecret-1234
+    ports:
+      - "127.0.0.1:9000:9000"

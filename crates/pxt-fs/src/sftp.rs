@@ -201,6 +201,7 @@ impl RemoteFs for SftpFs {
             permissions: true,
             symlinks: true,
             owner_group: true,
+            atomic_writes: false,
         }
     }
 }

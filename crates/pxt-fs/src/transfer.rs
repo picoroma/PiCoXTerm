@@ -709,6 +709,22 @@ async fn upload_file<F: RemoteFs>(
     let mut src = tokio::fs::File::open(&item.src).await?;
     let src_len = src.metadata().await?.len();
 
+    // Backend con scritture atomiche (S3): l'oggetto compare solo a invio completo, quindi si scrive
+    // direttamente la destinazione, senza parziale né rename. Una pausa annulla l'invio (si riparte da zero).
+    if fs.capabilities().atomic_writes {
+        let mut writer = fs.open_write(target).await?;
+        let copied = pump(&mut src, &mut writer, control, shared).await;
+        match copied {
+            Ok(()) => writer.shutdown().await.map_err(TransferError::from)?,
+            Err(e) => return Err(e),
+        }
+        drop(writer);
+        if let Some(t) = item.modified {
+            let _ = fs.set_modified(target, t).await;
+        }
+        return Ok(());
+    }
+
     // Parziale valido? Stessa impronta (è nel nome) e gli ultimi byte combaciano con l'originale.
     let resume_at = match fs.stat(&part).await {
         Ok(e) if e.kind == EntryKind::File && e.size > 0 && e.size <= src_len => {

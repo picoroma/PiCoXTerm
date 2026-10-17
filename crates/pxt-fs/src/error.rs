@@ -10,6 +10,8 @@ pub enum FsError {
     Local(String),
     #[error("errore FTP: {0}")]
     Ftp(String),
+    #[error("errore S3: {0}")]
+    S3(String),
     #[error("certificato del server non attendibile (impronta {fingerprint})")]
     UntrustedCertificate { fingerprint: String, changed: bool },
     #[error("file troppo grande per l'editor ({size} byte, limite {max})")]

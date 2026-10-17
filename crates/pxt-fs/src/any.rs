@@ -9,21 +9,25 @@ use std::task::{Context, Poll};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
 use crate::ftp::{FtpReader, FtpWriter};
-use crate::{Entry, FsCapabilities, FtpFs, RemoteFs, Result, SftpFs};
+use crate::s3::{S3Reader, S3Writer};
+use crate::{Entry, FsCapabilities, FtpFs, RemoteFs, Result, S3Fs, SftpFs};
 
 pub enum AnyFs {
     Sftp(SftpFs),
     Ftp(FtpFs),
+    S3(S3Fs),
 }
 
 pub enum AnyReader {
     Sftp(<SftpFs as RemoteFs>::Reader),
     Ftp(FtpReader),
+    S3(S3Reader),
 }
 
 pub enum AnyWriter {
     Sftp(<SftpFs as RemoteFs>::Writer),
     Ftp(FtpWriter),
+    S3(S3Writer),
 }
 
 impl AsyncRead for AnyReader {
@@ -35,6 +39,7 @@ impl AsyncRead for AnyReader {
         match self.get_mut() {
             AnyReader::Sftp(r) => Pin::new(r).poll_read(cx, buf),
             AnyReader::Ftp(r) => Pin::new(r).poll_read(cx, buf),
+            AnyReader::S3(r) => Pin::new(r).poll_read(cx, buf),
         }
     }
 }
@@ -48,6 +53,7 @@ impl AsyncWrite for AnyWriter {
         match self.get_mut() {
             AnyWriter::Sftp(w) => Pin::new(w).poll_write(cx, data),
             AnyWriter::Ftp(w) => Pin::new(w).poll_write(cx, data),
+            AnyWriter::S3(w) => Pin::new(w).poll_write(cx, data),
         }
     }
 
@@ -55,6 +61,7 @@ impl AsyncWrite for AnyWriter {
         match self.get_mut() {
             AnyWriter::Sftp(w) => Pin::new(w).poll_flush(cx),
             AnyWriter::Ftp(w) => Pin::new(w).poll_flush(cx),
+            AnyWriter::S3(w) => Pin::new(w).poll_flush(cx),
         }
     }
 
@@ -62,6 +69,7 @@ impl AsyncWrite for AnyWriter {
         match self.get_mut() {
             AnyWriter::Sftp(w) => Pin::new(w).poll_shutdown(cx),
             AnyWriter::Ftp(w) => Pin::new(w).poll_shutdown(cx),
+            AnyWriter::S3(w) => Pin::new(w).poll_shutdown(cx),
         }
     }
 }
@@ -72,6 +80,7 @@ macro_rules! forward {
         match $self {
             AnyFs::Sftp($fs) => $call,
             AnyFs::Ftp($fs) => $call,
+            AnyFs::S3($fs) => $call,
         }
     };
 }
@@ -124,6 +133,7 @@ impl RemoteFs for AnyFs {
         Ok(match self {
             AnyFs::Sftp(f) => AnyReader::Sftp(f.open_read(path).await?),
             AnyFs::Ftp(f) => AnyReader::Ftp(f.open_read(path).await?),
+            AnyFs::S3(f) => AnyReader::S3(f.open_read(path).await?),
         })
     }
 
@@ -131,6 +141,7 @@ impl RemoteFs for AnyFs {
         Ok(match self {
             AnyFs::Sftp(f) => AnyWriter::Sftp(f.open_write(path).await?),
             AnyFs::Ftp(f) => AnyWriter::Ftp(f.open_write(path).await?),
+            AnyFs::S3(f) => AnyWriter::S3(f.open_write(path).await?),
         })
     }
 
@@ -138,6 +149,7 @@ impl RemoteFs for AnyFs {
         Ok(match self {
             AnyFs::Sftp(f) => AnyReader::Sftp(f.open_read_at(path, offset).await?),
             AnyFs::Ftp(f) => AnyReader::Ftp(f.open_read_at(path, offset).await?),
+            AnyFs::S3(f) => AnyReader::S3(f.open_read_at(path, offset).await?),
         })
     }
 
@@ -145,6 +157,7 @@ impl RemoteFs for AnyFs {
         Ok(match self {
             AnyFs::Sftp(f) => AnyWriter::Sftp(f.open_write_at(path, offset).await?),
             AnyFs::Ftp(f) => AnyWriter::Ftp(f.open_write_at(path, offset).await?),
+            AnyFs::S3(f) => AnyWriter::S3(f.open_write_at(path, offset).await?),
         })
     }
 

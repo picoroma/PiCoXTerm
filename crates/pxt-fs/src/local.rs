@@ -297,6 +297,7 @@ impl RemoteFs for LocalFs {
             permissions: cfg!(unix),
             symlinks: true,
             owner_group: false,
+            atomic_writes: false,
         }
     }
 }

@@ -37,4 +37,7 @@ pub struct FsCapabilities {
     pub permissions: bool,
     pub symlinks: bool,
     pub owner_group: bool,
+    /// Un file scritto compare solo a scrittura completa (S3): non servono file temporanei né rinomina,
+    /// e un'interruzione non lascia un oggetto a metà.
+    pub atomic_writes: bool,
 }

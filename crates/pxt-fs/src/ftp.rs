@@ -757,6 +757,7 @@ impl RemoteFs for FtpFs {
             permissions: true,
             symlinks: true,
             owner_group: false,
+            atomic_writes: false,
         }
     }
 }

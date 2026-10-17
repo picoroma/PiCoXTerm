@@ -12,6 +12,7 @@ mod ftp_tls;
 pub mod local;
 pub mod names;
 pub mod ops;
+pub mod s3;
 mod sftp;
 pub mod transfer;
 
@@ -20,6 +21,7 @@ pub use entry::{Entry, EntryKind, FsCapabilities};
 pub use error::FsError;
 pub use ftp::{FtpFs, FtpParams, FtpSecurity};
 pub use local::LocalFs;
+pub use s3::{ObjectHeaders, ObjectInfo, S3Fs, S3Params};
 pub use sftp::SftpFs;
 
 use std::future::Future;
