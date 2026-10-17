@@ -10,6 +10,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
 - Pause and resume for transfers: pausing keeps the partial files, resuming continues from where each file stopped (checked against the original) and skips files already finished. Failed files can be retried. Cancelling still deletes partial files.
 - "Open with system program" in the SFTP context menu: downloads a temporary copy, opens it with the system's associated program and offers to upload it back when it is saved (or "Always upload"). Warns if the file changed on the server. Scripts and executables are refused. Temporary copies are deleted when the file, the connection or the app is closed.
 
+### Fixed
+- "Re-inject tracking" now detects the shell actually running in the terminal. After `su - user` or `sudo su - user` it used the login shell and injected the wrong syntax; it now asks the running shell, and says so when that shell is unsupported.
+
 ### Changed
 - Partial files are named `<name>.<size>-<mtime>.pxt-part` so a partial of a different version of the file is never reused.
 

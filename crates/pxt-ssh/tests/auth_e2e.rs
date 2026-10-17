@@ -472,3 +472,153 @@ async fn cwd_tracking_reports_unsupported_shell_clearly() {
     );
     assert!(cwds.is_empty());
 }
+
+// ---- Criteri di accettazione di M2: tempi e cambio utente ----
+
+/// Collega come `user` (servizio `ssh-shells`) con il tracciamento attivo.
+async fn shell_with_tracking(
+    user: &str,
+) -> (pxt_ssh::Shell, mpsc::Receiver<pxt_ssh::ShellEvent>, String) {
+    let (tx, rx) = mpsc::channel(256);
+    let verifier: HostKeyVerifier =
+        Arc::new(|_| Box::pin(async { HostKeyDecision::AcceptAndSave }));
+    let shell = connect_shell(
+        ConnectParams {
+            hops: vec![Hop {
+                host: "127.0.0.1".into(),
+                port: 2223,
+                username: user.into(),
+                auth: Credentials::Password("test".into()),
+            }],
+            cols: 80,
+            rows: 24,
+            term: "xterm".into(),
+        },
+        fresh_known(),
+        verifier,
+        tx,
+    )
+    .await
+    .unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(800)).await;
+    let detected = shell.enable_cwd_tracking().await.unwrap();
+    (shell, rx, detected)
+}
+
+/// Aspetta un evento `Cwd` con il percorso dato; restituisce dopo quanto è arrivato.
+async fn wait_cwd(
+    rx: &mut mpsc::Receiver<pxt_ssh::ShellEvent>,
+    expected: &str,
+    max: std::time::Duration,
+) -> Option<std::time::Duration> {
+    let t0 = std::time::Instant::now();
+    while t0.elapsed() < max {
+        if let Ok(Some(pxt_ssh::ShellEvent::Cwd(p))) =
+            tokio::time::timeout(std::time::Duration::from_millis(50), rx.recv()).await
+        {
+            if p == expected {
+                return Some(t0.elapsed());
+            }
+        }
+    }
+    None
+}
+
+async fn cd_latency(user: &str) -> Vec<std::time::Duration> {
+    let (shell, mut rx, _) = shell_with_tracking(user).await;
+    // Si scarta il percorso iniziale.
+    tokio::time::sleep(std::time::Duration::from_millis(1200)).await;
+    while rx.try_recv().is_ok() {}
+    let mut out = Vec::new();
+    for dir in ["/etc", "/usr", "/tmp", "/var"] {
+        shell
+            .write(format!("cd {dir}\n").into_bytes())
+            .await
+            .unwrap();
+        out.push(
+            wait_cwd(&mut rx, dir, std::time::Duration::from_secs(3))
+                .await
+                .unwrap_or_else(|| panic!("{user}: nessun evento per {dir}")),
+        );
+    }
+    shell.close().await;
+    out
+}
+
+#[tokio::test]
+#[ignore = "richiede il container di testenv"]
+async fn accept_panel_updates_within_500ms_in_bash_and_tcsh() {
+    for user in ["bashuser", "tcshuser"] {
+        let lat = cd_latency(user).await;
+        println!("{user}: tempi di aggiornamento {lat:?}");
+        assert!(
+            lat.iter()
+                .all(|d| *d < std::time::Duration::from_millis(500)),
+            "{user}: troppo lento: {lat:?}"
+        );
+    }
+}
+
+/// Dopo `su - altro_utente` la shell cambia: la re-iniezione deve usare **quella** shell.
+async fn reinject_after_su(from: &str, to: &str, expected_shell: &str) {
+    let (shell, mut rx, first) = shell_with_tracking(from).await;
+    println!("{from}: shell iniziale {first}");
+    tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
+    shell
+        .write(format!("sudo su - {to}\n").into_bytes())
+        .await
+        .unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(2000)).await;
+    let mut seen = Vec::new();
+    while let Ok(ev) = rx.try_recv() {
+        if let pxt_ssh::ShellEvent::Data(d) = ev {
+            seen.extend(d);
+        }
+    }
+    println!("terminale dopo su: {:?}", String::from_utf8_lossy(&seen));
+
+    // Come il pulsante "Re-inietta" dell'interfaccia.
+    let detected = shell.reinject_cwd_tracking().await;
+    println!("dopo su - {to}: rilevata {detected:?}");
+    tokio::time::sleep(std::time::Duration::from_millis(800)).await;
+    shell.write(b"cd /etc\n".to_vec()).await.unwrap();
+    let got = wait_cwd(&mut rx, "/etc", std::time::Duration::from_secs(3)).await;
+    shell.close().await;
+    assert!(
+        detected
+            .as_deref()
+            .is_ok_and(|s| s.ends_with(expected_shell)),
+        "shell rilevata {detected:?}, attesa {expected_shell}"
+    );
+    assert!(
+        got.is_some(),
+        "il tracciamento non è ripartito dopo su - {to}"
+    );
+}
+
+#[tokio::test]
+#[ignore = "richiede il container di testenv"]
+async fn accept_reinject_after_su_to_another_shell() {
+    reinject_after_su("bashuser", "tcshuser", "tcsh").await;
+}
+
+#[tokio::test]
+#[ignore = "richiede il container di testenv"]
+async fn accept_reinject_after_su_to_zsh() {
+    reinject_after_su("bashuser", "zshuser", "zsh").await;
+}
+
+#[tokio::test]
+#[ignore = "richiede il container di testenv"]
+async fn reinject_after_su_to_an_unsupported_shell_says_so_instead_of_injecting_the_wrong_one() {
+    let (shell, _rx, _) = shell_with_tracking("bashuser").await;
+    tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
+    shell.write(b"sudo su - ashuser\n".to_vec()).await.unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(2000)).await;
+    let r = shell.reinject_cwd_tracking().await;
+    shell.close().await;
+    assert!(
+        matches!(&r, Err(SshError::UnsupportedShell(s)) if s.ends_with("ash") || s.ends_with("busybox")),
+        "{r:?}"
+    );
+}

@@ -1,15 +1,15 @@
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use russh::client::{self, Handler};
 use russh::keys::{HashAlg, PublicKeyOrCertificate};
 use russh::ChannelMsg;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 
 use crate::auth::{authenticate, Credentials};
-use crate::osc7::Osc7Scanner;
+use crate::osc7::{Osc7Scanner, OscEvent};
 use crate::{HostKeyStatus, KnownHosts, SshError};
 
 /// Un salto della catena: l'ultimo è la destinazione, i precedenti sono jump host.
@@ -68,6 +68,8 @@ pub struct Shell {
     pub(crate) tx: mpsc::Sender<Cmd>,
     /// Connessione condivisa: serve ad aprire altri canali (SFTP) senza una seconda autenticazione.
     pub(crate) handle: Arc<client::Handle<Client>>,
+    /// Chi aspetta la risposta della sonda "quale shell è?" (vedi `detect_current_shell`).
+    pub(crate) probe: Arc<Mutex<Option<oneshot::Sender<String>>>>,
 }
 
 impl Shell {
@@ -276,6 +278,8 @@ pub async fn connect_shell(
     channel.request_shell(true).await?;
 
     let (tx, mut rx) = mpsc::channel::<Cmd>(256);
+    let probe: Arc<Mutex<Option<oneshot::Sender<String>>>> = Arc::default();
+    let task_probe = Arc::clone(&probe);
     let task_handle = Arc::clone(&handle);
     tokio::spawn(async move {
         // La connessione (jump host compresi) resta aperta finché esiste almeno una copia di `Shell`
@@ -287,8 +291,18 @@ pub async fn connect_shell(
             tokio::select! {
                 msg = channel.wait() => match msg {
                     Some(ChannelMsg::Data { data }) => {
-                        for path in osc7.feed(&data) {
-                            let _ = events.send(ShellEvent::Cwd(path)).await;
+                        for ev in osc7.feed(&data) {
+                            match ev {
+                                OscEvent::Cwd(path) => {
+                                    let _ = events.send(ShellEvent::Cwd(path)).await;
+                                }
+                                OscEvent::Shell(name) => {
+                                    let waiting = task_probe.lock().unwrap().take();
+                                    if let Some(reply) = waiting {
+                                        let _ = reply.send(name);
+                                    }
+                                }
+                            }
                         }
                         if events.send(ShellEvent::Data(data.to_vec())).await.is_err() { break; }
                     }
@@ -309,5 +323,5 @@ pub async fn connect_shell(
         let _ = events.send(ShellEvent::Closed(exit)).await;
     });
 
-    Ok(Shell { tx, handle })
+    Ok(Shell { tx, handle, probe })
 }

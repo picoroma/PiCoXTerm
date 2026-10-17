@@ -832,11 +832,12 @@ fn tracking_event(result: Result<String, SshError>) -> TermEvent {
     }
 }
 
-/// Attiva a mano il tracciamento della directory (rileva la shell e inietta la riga).
+/// Attiva a mano il tracciamento della directory ("Re-inietta"): rileva la shell **in uso adesso**
+/// (dopo `su - altro_utente` non è più quella di login) e ne inietta la riga.
 #[tauri::command]
 async fn ssh_enable_cwd_tracking(state: Shared<'_>, id: u64) -> Result<TermEvent, String> {
     let shell = get_shell(&state, id)?;
-    Ok(tracking_event(shell.enable_cwd_tracking().await))
+    Ok(tracking_event(shell.reinject_cwd_tracking().await))
 }
 
 fn get_shell(state: &AppState, id: u64) -> Result<Shell, String> {
@@ -1216,6 +1217,40 @@ fn open_with_system(path: &std::path::Path) -> Result<(), String> {
         .map_err(|e| format!("impossibile aprire il file con il programma di sistema: {e}"))
 }
 
+/// Segue un file locale finché `stop` è falso e chiama `on_change` quando data o dimensione cambiano e
+/// restano uguali per un intero intervallo (il programma ha finito di scrivere: i salvataggi fatti in
+/// più passi, come "scrivi un temporaneo e rinomina", producono un solo avviso).
+async fn watch_file(
+    path: &std::path::Path,
+    stop: &AtomicBool,
+    poll: std::time::Duration,
+    mut on_change: impl FnMut(),
+) {
+    let stamp = |p: &std::path::Path| {
+        std::fs::metadata(p)
+            .ok()
+            .map(|m| (m.len(), m.modified().ok()))
+    };
+    let mut known = stamp(path);
+    let mut candidate = None;
+    while !stop.load(Ordering::Relaxed) {
+        tokio::time::sleep(poll).await;
+        let now = stamp(path);
+        // File sparito per un attimo (rinomina in corso) o invariato: niente da segnalare.
+        if now.is_none() || now == known {
+            candidate = None;
+            continue;
+        }
+        if candidate == now {
+            known = now;
+            candidate = None;
+            on_change();
+        } else {
+            candidate = now;
+        }
+    }
+}
+
 /// Scarica un file remoto in una cartella temporanea e lo apre con il programma del sistema. Da
 /// quel momento si controlla se viene salvato e la UI riceve `Changed`.
 #[tauri::command]
@@ -1287,31 +1322,12 @@ async fn external_edit_open(
         .unwrap()
         .insert(edit_id, Arc::clone(&edit));
 
-    // Controllo periodico: quando la data o la dimensione cambiano e restano uguali per un secondo
-    // (il programma ha finito di scrivere) si avvisa la UI.
+    // Controllo periodico: quando il programma salva il file si avvisa la UI.
     tauri::async_runtime::spawn(async move {
-        let stamp = |p: &std::path::Path| {
-            std::fs::metadata(p)
-                .ok()
-                .map(|m| (m.len(), m.modified().ok()))
-        };
-        let mut known = stamp(&edit.local_path);
-        let mut candidate = None;
-        while !edit.stop.load(Ordering::Relaxed) {
-            tokio::time::sleep(EXTERNAL_POLL).await;
-            let now = stamp(&edit.local_path);
-            if now.is_none() || now == known {
-                candidate = None;
-                continue;
-            }
-            if candidate == now {
-                known = now;
-                candidate = None;
-                let _ = edit.on_event.send(ExternalEvent::Changed { edit_id });
-            } else {
-                candidate = now;
-            }
-        }
+        watch_file(&edit.local_path, &edit.stop, EXTERNAL_POLL, || {
+            let _ = edit.on_event.send(ExternalEvent::Changed { edit_id });
+        })
+        .await;
     });
     Ok(ExternalOpened {
         edit_id,
@@ -1897,6 +1913,48 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn watcher_reports_a_saved_file_once_and_only_when_it_settles() {
+        use std::sync::atomic::AtomicUsize;
+        let dir = std::env::temp_dir().join(format!("pxt-watch-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("a.txt");
+        std::fs::write(&file, "uno").unwrap();
+        let stop = Arc::new(AtomicBool::new(false));
+        let count = Arc::new(AtomicUsize::new(0));
+        let (stop2, count2, file2) = (Arc::clone(&stop), Arc::clone(&count), file.clone());
+        let task = std::thread::spawn(move || {
+            tauri::async_runtime::block_on(async {
+                watch_file(&file2, &stop2, std::time::Duration::from_millis(40), || {
+                    count2.fetch_add(1, Ordering::SeqCst);
+                })
+                .await;
+            });
+        });
+        let wait = |ms| std::thread::sleep(std::time::Duration::from_millis(ms));
+        wait(200);
+        assert_eq!(
+            count.load(Ordering::SeqCst),
+            0,
+            "nessuna modifica, nessun avviso"
+        );
+        // Salvataggio in più passi (temporaneo + rinomina): un solo avviso.
+        std::fs::write(dir.join("a.tmp"), "due più lungo").unwrap();
+        std::fs::remove_file(&file).unwrap();
+        std::fs::rename(dir.join("a.tmp"), &file).unwrap();
+        wait(400);
+        assert_eq!(count.load(Ordering::SeqCst), 1);
+        // Secondo salvataggio: secondo avviso.
+        std::fs::write(&file, "tre ancora più lungo").unwrap();
+        wait(400);
+        assert_eq!(count.load(Ordering::SeqCst), 2);
+        wait(300);
+        assert_eq!(count.load(Ordering::SeqCst), 2, "nessun avviso doppio");
+        stop.store(true, Ordering::Relaxed);
+        task.join().unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn runnable_files_are_not_opened_with_the_system_program() {

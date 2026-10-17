@@ -103,6 +103,20 @@ Attività:
 
 > **Punto di controllo:** dopo M2 conviene usare PiCoXterm per qualche giorno nel lavoro reale prima di proseguire. I problemi di UX emersi si correggono qui, non dopo.
 
+**Esito della verifica (2026-10-17)** — prove automatiche contro i server di `testenv/`:
+
+| Criterio | Esito |
+|---|---|
+| `cd` nel terminale, pannello aggiornato entro 500 ms, con bash e tcsh | **Superato**: 1-3 ms in bash e in tcsh (zsh funziona uguale) |
+| Dopo `sudo su - <utente>`, "Re-inietta" ripristina il tracciamento | **Superato dopo una correzione** (D-23): prima rilevava la shell di login e non quella in uso; ora lo chiede alla shell. Verificato bash → tcsh, bash → zsh; per una shell non supportata (ash) lo dice invece di iniettare quella sbagliata |
+| 1.000 file piccoli | **Superato**: 2,7 s in upload, 2,3 s in download, contenuto verificato |
+| File da 2 GB, annullamento e ripresa | **Superato**: pausa a 411 MiB, ripresa dal punto raggiunto, identico byte per byte all'originale |
+| Modifica con l'editor di sistema e ricaricamento | **Superato in parti**: scarica, ricarica sul server e rileva le modifiche concorrenti (prova su server); il controllo del salvataggio ha un test; il sistema apre il Blocco note per un `.txt`. **Non provato** l'intero giro nell'app con un editor vero |
+| Memoria stabile durante 2 GB | **Superato** per il motore di trasferimento: picco di 15 MiB di memoria di lavoro dell'intero processo di prova. Non misurato il processo dell'app completa |
+
+Attività dell'elenco non realizzate: **preferiti** (punto 4), **backend locale** di `RemoteFs` (serve al doppio pannello di M3), tracciamento per **ksh e csh** (punto 3: oggi bash, zsh e tcsh).
+
+
 ---
 
 ## M3: sessioni SFTP, FTP/FTPS e S3

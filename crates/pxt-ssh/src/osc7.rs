@@ -1,7 +1,18 @@
-//! Intercettazione di OSC 7 (`ESC ] 7 ; file://host/path BEL|ST`) nel flusso del terminale.
-//! Il flusso non viene modificato: lo scanner si limita a osservarlo, anche a cavallo di più chunk.
+//! Intercettazione di due sequenze OSC nel flusso del terminale: OSC 7 (`ESC ] 7 ; file://host/path
+//! BEL|ST`, la directory corrente) e OSC 7770 (`ESC ] 7770 ; nome BEL|ST`, privata: la risposta della
+//! sonda che chiede alla shell remota *quale* shell è). Il flusso non viene modificato: lo scanner si
+//! limita a osservarlo, anche a cavallo di più chunk.
 
 const MAX_OSC_LEN: usize = 4096;
+
+/// Ciò che lo scanner riconosce.
+#[derive(Debug, PartialEq, Eq)]
+pub enum OscEvent {
+    /// Directory corrente (OSC 7).
+    Cwd(String),
+    /// Nome della shell in esecuzione, dalla sonda (OSC 7770).
+    Shell(String),
+}
 
 #[derive(Default)]
 pub struct Osc7Scanner {
@@ -25,8 +36,8 @@ impl Osc7Scanner {
         Self::default()
     }
 
-    /// Analizza un chunk e restituisce i percorsi comunicati con OSC 7, nell'ordine.
-    pub fn feed(&mut self, chunk: &[u8]) -> Vec<String> {
+    /// Analizza un chunk e restituisce gli eventi riconosciuti, nell'ordine.
+    pub fn feed(&mut self, chunk: &[u8]) -> Vec<OscEvent> {
         let mut found = Vec::new();
         for &b in chunk {
             match self.state {
@@ -70,19 +81,30 @@ impl Osc7Scanner {
         self.state = State::Ground;
     }
 
-    fn finish(&mut self, found: &mut Vec<String>) {
-        if let Some(path) = parse_payload(&self.buf) {
-            found.push(path);
+    fn finish(&mut self, found: &mut Vec<OscEvent>) {
+        if let Some(ev) = parse_payload(&self.buf) {
+            found.push(ev);
         }
         self.reset();
     }
 }
 
-/// `7;file://host/percent%20encoded/path` -> percorso decodificato.
-fn parse_payload(payload: &[u8]) -> Option<String> {
+/// `7;file://host/percent%20encoded/path` -> percorso decodificato; `7770;nome` -> nome della shell.
+fn parse_payload(payload: &[u8]) -> Option<OscEvent> {
+    if let Some(name) = payload.strip_prefix(b"7770;") {
+        let name = std::str::from_utf8(name).ok()?.trim();
+        // Il nome arriva da un comando eseguito sul server: si accettano solo caratteri da nome di
+        // programma o percorso, mai sequenze di controllo.
+        let ok = !name.is_empty()
+            && name.len() <= 256
+            && name
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || "/-_.+".contains(c));
+        return ok.then(|| OscEvent::Shell(name.to_string()));
+    }
     let rest = payload.strip_prefix(b"7;file://")?;
     let slash = rest.iter().position(|&c| c == b'/')?;
-    percent_decode(&rest[slash..])
+    percent_decode(&rest[slash..]).map(OscEvent::Cwd)
 }
 
 fn percent_decode(s: &[u8]) -> Option<String> {
@@ -109,14 +131,14 @@ mod tests {
     fn bel_terminated() {
         let mut s = Osc7Scanner::new();
         let r = s.feed(b"prompt\x1b]7;file://host/usr/sap/BGP\x07$ ");
-        assert_eq!(r, vec!["/usr/sap/BGP"]);
+        assert_eq!(r, vec![OscEvent::Cwd("/usr/sap/BGP".into())]);
     }
 
     #[test]
     fn st_terminated_and_percent_decoding() {
         let mut s = Osc7Scanner::new();
         let r = s.feed(b"\x1b]7;file://h/tmp/a%20b%C3%A8\x1b\\");
-        assert_eq!(r, vec!["/tmp/a bè"]);
+        assert_eq!(r, vec![OscEvent::Cwd("/tmp/a bè".into())]);
     }
 
     #[test]
@@ -124,7 +146,7 @@ mod tests {
         let mut s = Osc7Scanner::new();
         assert!(s.feed(b"x\x1b]7;file://h/us").is_empty());
         assert!(s.feed(b"r/sap/SYS").is_empty());
-        assert_eq!(s.feed(b"\x07"), vec!["/usr/sap/SYS"]);
+        assert_eq!(s.feed(b"\x07"), vec![OscEvent::Cwd("/usr/sap/SYS".into())]);
     }
 
     #[test]
@@ -135,13 +157,35 @@ mod tests {
         long.extend(std::iter::repeat_n(b'a', MAX_OSC_LEN + 10));
         long.push(0x07);
         assert!(s.feed(&long).is_empty());
-        assert_eq!(s.feed(b"\x1b]7;file://h/ok\x07"), vec!["/ok"]);
+        assert_eq!(
+            s.feed(b"\x1b]7;file://h/ok\x07"),
+            vec![OscEvent::Cwd("/ok".into())]
+        );
     }
 
     #[test]
     fn multiple_in_one_chunk() {
         let mut s = Osc7Scanner::new();
         let r = s.feed(b"\x1b]7;file://h/a\x07xx\x1b]7;file://h/b\x07");
-        assert_eq!(r, vec!["/a", "/b"]);
+        assert_eq!(
+            r,
+            vec![OscEvent::Cwd("/a".into()), OscEvent::Cwd("/b".into())]
+        );
+    }
+
+    #[test]
+    fn shell_probe_reply_is_recognised_and_sanitised() {
+        let mut s = Osc7Scanner::new();
+        assert_eq!(
+            s.feed(b"\x1b]7770;-tcsh\x07"),
+            vec![OscEvent::Shell("-tcsh".into())]
+        );
+        assert_eq!(
+            s.feed(b"\x1b]7770;/usr/bin/bash\x1b\\"),
+            vec![OscEvent::Shell("/usr/bin/bash".into())]
+        );
+        // Vuoto o con caratteri strani: ignorato.
+        assert!(s.feed(b"\x1b]7770;\x07").is_empty());
+        assert!(s.feed(b"\x1b]7770;a;rm -rf\x07").is_empty());
     }
 }
