@@ -21,12 +21,12 @@ const files = { ...newSession(root.id, 'sftp'), name: 'FILES srv (SFTP)', host: 
 files.sftp = { startPath: '/home/u/projects', showHidden: false }
 files.ui.color = '#2e8b57'
 const filesPw = { ...newSession(null, 'sftp'), name: 'FILES password (SFTP)', host: '10.0.0.9', username: 'u' }
-const ftpTls = { ...newSession(root.id, 'ftp'), name: 'FTPS prova (FTP)', host: 'ftp.test', port: 21, username: 'test' }
+const ftpTls = { ...newSession(root.id, 'ftp'), name: 'Partner FTPS', host: 'ftp.test', port: 21, username: 'test' }
 ftpTls.credentialRef = { provider: 'local', id: 'f1' }
 const ftpPlain = { ...newSession(null, 'ftp'), name: 'FTP in chiaro', host: 'ftp.plain', port: 21, username: 'test' }
 ftpPlain.credentialRef = { provider: 'local', id: 'f2' }
 ftpPlain.ftp = { security: 'plain', pinnedCert: null, startPath: null, showHidden: false }
-const s3Test = { ...newSession(root.id, 's3'), name: 'S3 prova (S3)', host: 's3.amazonaws.com', port: 443, username: 'pxtaccess' }
+const s3Test = { ...newSession(root.id, 's3'), name: 'Backup S3', host: 's3.amazonaws.com', port: 443, username: 'pxtaccess' }
 s3Test.credentialRef = { provider: 'local', id: 's1' }
 s3Test.s3 = { region: 'us-east-1', endpoint: 'http://127.0.0.1:9000', pathStyle: true, bucket: null, profile: null, showHidden: false }
 let nodes: SessionNode[] = [root, pw, key, prod, test, files, filesPw, ftpTls, ftpPlain, s3Test]
@@ -59,6 +59,11 @@ const fakeFs: Record<string, any[]> = {
 }
 ;// Ogni connessione ha il suo canale di eventi: __emitCwd(path, connId) simula il terminale di quella scheda.
 const eventChannels = new Map<number, string>()
+const dataChannels = new Map<number, string>()
+;(window as any).__emitData = (text: string, connId?: number) => {
+  const ch = connId !== undefined ? dataChannels.get(connId) : [...dataChannels.values()].pop()
+  if (ch) emit(ch, Array.from(new TextEncoder().encode(text)))
+}
 let connSeq = 6
 ;(window as any).__emitCwd = (path: string, connId?: number) =>
   emit(connId !== undefined ? eventChannels.get(connId)! : (window as any).__lastEvent, { type: 'cwd', path })
@@ -133,11 +138,24 @@ function runMockJob(rec: { plan: any; policy: string; step: number }, onEvent: s
 const s3Conns = new Set<number>()
 const s3d = (name: string, parent: string) => ({ ...d(name, parent), size: 0, modified: null, mode: null, owner: null, group: null, uid: null, gid: null })
 const s3f = (name: string, parent: string, size: number) => ({ ...f(name, parent, size), mode: null, owner: null, group: null, uid: null, gid: null })
+const day = (n: number) => 1_790_900_000 + (n % 16) * 86_400
+const s3t = (name: string, parent: string, size: number, n: number) => ({ ...s3f(name, parent, size), modified: day(n) })
 const fakeS3: Record<string, any[]> = {
-  '/': [s3d('backup-prod', '/'), s3d('media', '/')],
-  '/backup-prod': [s3d('2026', '/backup-prod'), s3f('LEGGIMI.txt', '/backup-prod', 120), s3f('dump.sql.gz', '/backup-prod', 73_000_000)],
-  '/backup-prod/2026': [s3f('ottobre.tar', '/backup-prod/2026', 9_000_000)],
-  '/media': [s3f('logo.png', '/media', 5400)],
+  '/': [s3d('backups-2026', '/'), s3d('logs-prod', '/'), s3d('media-assets', '/'), s3d('releases', '/')],
+  '/backups-2026': [
+    s3d('db', '/backups-2026'),
+    s3d('config', '/backups-2026'),
+    s3t('LEGGIMI.txt', '/backups-2026', 640, 1),
+    s3t('hana-full-2026-10-01.tar.gz', '/backups-2026', 4_812_000_000, 5),
+    s3t('hana-full-2026-10-08.tar.gz', '/backups-2026', 4_903_000_000, 12),
+    s3t('hana-full-2026-10-15.tar.gz', '/backups-2026', 4_955_000_000, 19),
+    s3t('inventario.csv', '/backups-2026', 182_400, 20),
+  ],
+  '/backups-2026/db': [s3t('catalog.bak', '/backups-2026/db', 73_000_000, 4)],
+  '/backups-2026/config': [s3t('nginx.conf', '/backups-2026/config', 2_100, 3)],
+  '/logs-prod': [s3t('app-2026-10-16.log.gz', '/logs-prod', 18_400_000, 18), s3t('app-2026-10-17.log.gz', '/logs-prod', 21_900_000, 19)],
+  '/media-assets': [s3t('logo.png', '/media-assets', 5_400, 2), s3t('banner.jpg', '/media-assets', 1_240_000, 6)],
+  '/releases': [s3t('picoxterm-0.1.0-beta.1.zip', '/releases', 11_800_000, 14)],
 }
 const s3Info: Record<string, any> = {}
 
@@ -165,8 +183,10 @@ const handlers: Record<string, (args: any) => unknown> = {
     s3Conns.add(id)
     return id
   },
-  s3_object_info: ({ path }) =>
-    (s3Info[path] ??= { size: 120, etag: 'd41d8cd98f00b204e9800998ecf8427e', modified: 1760100000, storageClass: 'STANDARD', contentType: 'text/plain', cacheControl: null, contentDisposition: null, contentEncoding: null, metadata: { progetto: 'picoxterm' }, versionId: null, encryption: null, tags: [['env', 'test']] }),
+  s3_object_info: ({ path }) => {
+    const entry = Object.values(fakeS3).flat().find((e: any) => e.path === path)
+    return (s3Info[path] ??= { size: entry?.size ?? 120, modified: entry?.modified ?? 1760100000, etag: '9b2cf535f27731c974343645a3985328-3', storageClass: 'STANDARD', contentType: 'text/plain', cacheControl: null, contentDisposition: null, contentEncoding: null, metadata: { progetto: 'picoxterm' }, versionId: null, encryption: null, tags: [['env', 'prod']] })
+  },
   s3_set_headers: ({ path, headers }) => {
     ;(window as any).__lastS3Headers = { path, headers }
     Object.assign((s3Info[path] ??= {}), { contentType: headers.contentType, cacheControl: headers.cacheControl, metadata: headers.metadata })
@@ -313,13 +333,14 @@ const handlers: Record<string, (args: any) => unknown> = {
     nodes = nodes.filter((n) => !doomed.has(n.id))
   },
   // host "newhost" = chiave sconosciuta; "changed" = chiave cambiata; altro = chiede la password
-  ssh_connect: async ({ request, onEvent }) => {
+  ssh_connect: async ({ request, onEvent, onData }) => {
     // Le sessioni salvate arrivano con il solo id: l'host si ricava dall'elenco.
     request = { ...request, host: request.host ?? (nodes.find((n) => n.id === request.sessionId) as any)?.host }
     if (request.host === 'srv' || request.host === 'srv-ash') {
       ;(window as any).__lastEvent = onEvent
       const connId = ++connSeq
       eventChannels.set(connId, onEvent)
+      dataChannels.set(connId, onData)
       const unsupported = request.host === 'srv-ash'
       setTimeout(() => emit(onEvent, unsupported ? { type: 'tracking', state: 'unsupported', shell: '/bin/ash', message: null } : { type: 'tracking', state: 'active', shell: '/bin/bash', message: null }), 400)
       return connId
