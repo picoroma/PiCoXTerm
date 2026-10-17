@@ -14,7 +14,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
 - "Open with system program" in the SFTP context menu: downloads a temporary copy, opens it with the system's associated program and offers to upload it back when it is saved (or "Always upload"). Warns if the file changed on the server. Scripts and executables are refused. Temporary copies are deleted when the file, the connection or the app is closed.
 
 ### Fixed
-- The remote file list now has **Permissions, User and Group columns** (shown by default in SFTP tabs and in the widened side panel; a toolbar button shows or hides them in the narrow side panel). SFTP only reports numeric ids, so names are read from the server's `/etc/passwd` and `/etc/group`; users that live elsewhere (LDAP) stay numeric. Columns can be sorted by user and group.
+- The remote file list now shows **permissions, user and group**: as columns when the panel is wide enough (about 540 px), otherwise on a small second line under each name. A toolbar button hides or shows them. SFTP only reports numeric ids, so names are read from the server's `/etc/passwd` and `/etc/group`; users that live elsewhere (LDAP) stay numeric. Columns can be sorted by user and group.
 - "Re-inject tracking" now detects the shell actually running in the terminal. After `su - user` or `sudo su - user` it used the login shell and injected the wrong syntax; it now asks the running shell, and says so when that shell is unsupported.
 
 ### Changed

@@ -122,9 +122,14 @@
   const ownerOf = (e: SftpEntry) => e.owner ?? (e.uid !== null ? (idNames.users[e.uid] ?? String(e.uid)) : '')
   const groupOf = (e: SftpEntry) => e.group ?? (e.gid !== null ? (idNames.groups[e.gid] ?? String(e.gid)) : '')
 
-  /** Colonne di permessi, utente e gruppo: di norma visibili quando c'è spazio (pannello grande o largo). */
+  /** Permessi, utente e gruppo: di norma visibili; il pulsante nella barra li nasconde. */
   let detailsChoice = $state<boolean | null>(null)
-  const details = $derived(!isLocal && (detailsChoice ?? (standalone || wide)))
+  const details = $derived(!isLocal && (detailsChoice ?? true))
+  /** Larghezza del pannello: con poco spazio i dettagli vanno sotto il nome invece che in colonne. */
+  let panelWidth = $state(0)
+  const COLUMNS_MIN_WIDTH = 540
+  const columns = $derived(details && panelWidth >= COLUMNS_MIN_WIDTH)
+  const stacked = $derived(details && panelWidth < COLUMNS_MIN_WIDTH)
   /** Doppio pannello: il pannello remoto scarica nel pannello locale, senza chiedere la cartella. */
   const dual = $derived(localDir !== undefined)
 
@@ -647,10 +652,15 @@
   }
 
   onMount(() => {
+    const observer = new ResizeObserver(([entry]) => (panelWidth = entry.contentRect.width))
+    if (panelEl) {
+      panelWidth = panelEl.getBoundingClientRect().width
+      observer.observe(panelEl)
+    }
     let unlisten: (() => void) | undefined
     let disposed = false
     // Il pannello locale non riceve file da Esplora risorse: sono già nel disco locale.
-    if (kind === 'local') return
+    if (kind === 'local') return () => observer.disconnect()
     getCurrentWebview()
       .onDragDropEvent((event) => {
         const p = event.payload
@@ -672,6 +682,7 @@
         /* fuori da Tauri (anteprima nel browser) il trascinamento nativo non esiste */
       })
     return () => {
+      observer.disconnect()
       disposed = true
       unlisten?.()
     }
@@ -834,11 +845,11 @@
       </div>
     {/if}
 
-    <div class="cols" class:details role="row">
+    <div class="cols" class:details={columns} role="row">
       <button type="button" class="c-name" onclick={() => sortBy('name')}>{t('name')}{sortKey === 'name' ? (sortAsc ? ' ▲' : ' ▼') : ''}</button>
       <button type="button" class="c-size" onclick={() => sortBy('size')}>{t('size')}{sortKey === 'size' ? (sortAsc ? ' ▲' : ' ▼') : ''}</button>
       <button type="button" class="c-date" onclick={() => sortBy('modified')}>{t('modified')}{sortKey === 'modified' ? (sortAsc ? ' ▲' : ' ▼') : ''}</button>
-      {#if details}
+      {#if columns}
         <span class="c-perm">{t('permissions')}</span>
         <button type="button" class="c-user" onclick={() => sortBy('owner')}>{t('owner')}{sortKey === 'owner' ? (sortAsc ? ' ▲' : ' ▼') : ''}</button>
         <button type="button" class="c-group" onclick={() => sortBy('group')}>{t('group')}{sortKey === 'group' ? (sortAsc ? ' ▲' : ' ▼') : ''}</button>
@@ -853,7 +864,8 @@
       {#each rows as e (e.path)}
         <div
           class="row"
-          class:details
+          class:details={columns}
+          class:stacked
           class:selected={selection.has(e.path)}
           role="option"
           aria-selected={selection.has(e.path)}
@@ -865,10 +877,10 @@
           ondblclick={() => open(e)}
           onkeydown={(ev) => onkey(ev, e)}
         >
-          <span class="c-name"><span class="icon">{icon(e)}</span><span class="nm">{e.name}</span></span>
+          <span class="c-name"><span class="icon">{icon(e)}</span><span class="txt"><span class="nm">{e.name}</span>{#if stacked}<span class="sub">{modeString(e)}{ownerOf(e) ? ` · ${ownerOf(e)}:${groupOf(e)}` : ''}</span>{/if}</span></span>
           <span class="c-size">{e.kind === 'dir' ? '' : formatSize(e.size)}</span>
           <span class="c-date">{formatDate(e.modified)}</span>
-          {#if details}
+          {#if columns}
             <span class="c-perm" title={modeString(e)}>{modeString(e)}</span>
             <span class="c-user" title={ownerOf(e)}>{ownerOf(e)}</span>
             <span class="c-group" title={groupOf(e)}>{groupOf(e)}</span>
@@ -1039,6 +1051,19 @@
   .cols.details,
   .row.details {
     grid-template-columns: minmax(0, 1fr) 64px 118px 84px 74px 74px;
+  }
+  .txt {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+  }
+  .sub {
+    font-size: 10.5px;
+    color: var(--fg-dim);
+    font-family: Consolas, monospace;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
   .c-perm,
   .c-user,
