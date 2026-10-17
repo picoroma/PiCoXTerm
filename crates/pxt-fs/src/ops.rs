@@ -45,7 +45,17 @@ fn fail(report: &mut OpReport, path: &str, e: impl ToString) {
 /// Rifiuta percorsi che nessuno vuole davvero modificare in blocco.
 fn guard(path: &str) -> Result<()> {
     let trimmed = path.trim();
-    if trimmed.is_empty() || trimmed.chars().all(|c| c == '/') || trimmed == "." || trimmed == ".."
+    // Radici: "/", "\", "C:", "C:\" (le operazioni valgono anche per il filesystem locale).
+    let is_sep = |c: char| c == '/' || c == '\\';
+    let drive_root = trimmed.len() >= 2
+        && trimmed.as_bytes()[0].is_ascii_alphabetic()
+        && trimmed.as_bytes()[1] == b':'
+        && trimmed[2..].chars().all(is_sep);
+    if trimmed.is_empty()
+        || trimmed.chars().all(is_sep)
+        || drive_root
+        || trimmed == "."
+        || trimmed == ".."
     {
         return Err(FsError::Sftp(format!(
             "operazione rifiutata sul percorso \"{path}\""
@@ -183,10 +193,13 @@ mod tests {
 
     #[test]
     fn guard_refuses_root_and_empty_paths() {
-        for bad in ["", "   ", "/", "//", ".", ".."] {
+        for bad in [
+            "", "   ", "/", "//", ".", "..", "\\", "C:", "c:\\", "D:/", "Z:\\\\",
+        ] {
             assert!(guard(bad).is_err(), "{bad:?}");
         }
         assert!(guard("/tmp/x").is_ok());
+        assert!(guard("C:\\Users\\x").is_ok());
         assert!(guard("relativo/dir").is_ok());
     }
 }

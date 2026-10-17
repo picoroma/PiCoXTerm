@@ -6,6 +6,8 @@ pub enum FsError {
     PermissionDenied(String),
     #[error("errore SFTP: {0}")]
     Sftp(String),
+    #[error("errore locale: {0}")]
+    Local(String),
     #[error("file troppo grande per l'editor ({size} byte, limite {max})")]
     TooLarge { size: u64, max: u64 },
     #[error("il file non sembra di testo (contiene dati binari)")]

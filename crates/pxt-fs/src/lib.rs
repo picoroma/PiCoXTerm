@@ -6,12 +6,14 @@ pub mod edit;
 mod entry;
 mod error;
 pub mod external;
+pub mod local;
 pub mod ops;
 mod sftp;
 pub mod transfer;
 
 pub use entry::{Entry, EntryKind, FsCapabilities};
 pub use error::FsError;
+pub use local::LocalFs;
 pub use sftp::SftpFs;
 
 use std::future::Future;
