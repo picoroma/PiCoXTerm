@@ -51,6 +51,38 @@
     }
   }
 
+  // Larghezza dell'elenco dei bucket, regolabile e ricordata tra un avvio e l'altro.
+  const WIDTH_KEY = 'pxt.s3BucketWidth'
+  function loadWidth(): number {
+    try {
+      const v = Number(localStorage.getItem(WIDTH_KEY))
+      return Number.isFinite(v) && v >= 100 && v <= 600 ? v : 150
+    } catch {
+      return 150
+    }
+  }
+  let bucketWidth = $state(loadWidth())
+  let wrap = $state<HTMLDivElement>()
+
+  function dragBuckets(e: PointerEvent) {
+    e.preventDefault()
+    const move = (m: PointerEvent) => {
+      if (!wrap) return
+      bucketWidth = Math.round(Math.min(600, Math.max(100, m.clientX - wrap.getBoundingClientRect().left)))
+    }
+    const up = () => {
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', up)
+      try {
+        localStorage.setItem(WIDTH_KEY, String(bucketWidth))
+      } catch {
+        /* è solo una comodità */
+      }
+    }
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', up)
+  }
+
   const currentBucket = $derived(remotePath.split('/').filter(Boolean)[0] ?? '')
 
   async function loadBuckets() {
@@ -102,7 +134,7 @@
   }
 </script>
 
-<div class="s3" style:grid-template-columns="150px {showLocal ? '1fr 1fr' : '1fr'} 320px">
+<div class="s3" bind:this={wrap} style:grid-template-columns="{bucketWidth}px 6px {showLocal ? 'minmax(0,1fr) minmax(0,1fr)' : 'minmax(0,1fr)'} 320px">
   <nav class="buckets" aria-label={t('s3Buckets')}>
     <div class="head">
       <span>{t('s3Buckets')}</span>
@@ -114,6 +146,7 @@
     {/each}
     <button type="button" class="bucket" class:cur={currentBucket === ''} onclick={() => remote?.goto('/')}>⌂ /</button>
   </nav>
+  <div class="split" role="separator" aria-orientation="vertical" aria-label={t('resize')} onpointerdown={dragBuckets}></div>
 
   {#if showLocal}
     <div class="side">
@@ -195,6 +228,13 @@
     min-height: 0;
     overflow: hidden;
     border-left: 1px solid var(--border);
+  }
+  .split {
+    cursor: col-resize;
+    background: var(--border);
+  }
+  .split:hover {
+    background: var(--accent);
   }
   .buckets {
     display: flex;
