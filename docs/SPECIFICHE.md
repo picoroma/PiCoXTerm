@@ -320,7 +320,7 @@ Layout: albero delle sessioni a sinistra; sotto (o a fianco) il **pannello SFTP*
    La riga è preceduta da uno spazio (non finisce nella history con `HISTCONTROL=ignorespace`) e seguita da `clear`.
 3. **Fallback**: pulsante **"Sincronizza con il terminale"** che legge la directory tramite un canale exec separato, quando possibile.
 
-**Limite noto (da documentare in UI):** dopo `sudo su - <sid>adm` il tracciamento si perde, perché la nuova shell non ha l'iniezione. È lo stesso comportamento di MobaXterm. Mitigazione v1: pulsante **"Re-inietta tracciamento"** nella scheda, che reinvia la riga per la shell corrente. Inoltre il pannello SFTP lavora con l'utente di login, quindi i file di `<sid>adm` potrebbero non essere scrivibili (vedi backlog "SFTP via sudo").
+**Limite noto (da documentare in UI):** dopo `sudo su - <sid>adm` il tracciamento si perde, perché la nuova shell non ha l'iniezione. È lo stesso comportamento di MobaXterm. Mitigazione v1: pulsante **"Re-inietta tracciamento"** nella scheda, che reinvia la riga per la shell corrente. Inoltre il pannello SFTP lavora con l'utente di login, quindi i file di `<sid>adm` potrebbero non essere scrivibili (vedi D-24: non è prevista una vista con un altro utente).
 
 **Opzioni:** "Segui terminale" attivabile/disattivabile con un'icona (lucchetto); con il pannello sbloccato si naviga liberamente.
 
