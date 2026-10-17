@@ -214,3 +214,6 @@ In ordine di valore stimato, da ripriorizzare dopo l'uso reale:
 | Certificati SSH | |
 | Provider KeePass (.kdbx) | Per chi non usa RDM |
 | Snippet di comandi salvati | Per esempio comandi Basis frequenti |
+| **Colonne ridimensionabili** nei file browser (nome, dimensione, data, permessi, utente, gruppo) | Trascinando il bordo dell'intestazione; larghezze ricordate. Richiesta dell'utente (2026-10-17) |
+| Preferiti (cartelle preferite) nei file browser | Punto 4 di M2 non realizzato |
+| **Vista dei file con le credenziali di un altro utente** dopo `sudo su -` | Vedi "SFTP via sudo": oggi il pannello SFTP resta con l'utente del login SSH |
