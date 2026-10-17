@@ -92,4 +92,7 @@ M0 (technical spike) and M1 (tabbed SSH and local sessions) are complete. Curren
 
 ## Licence
 
-To be decided.
+PiCoXterm is free software, released under the [GNU General Public License v3.0](LICENSE) (`GPL-3.0-only`).
+Copyright (C) 2026 PiCo.
+
+You may use, study, modify and redistribute it; if you distribute a modified version, you must do so under the same licence and make its source code available.

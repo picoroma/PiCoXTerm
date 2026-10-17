@@ -3,7 +3,7 @@
 export const ABOUT = {
   author: 'PiCo',
   /** Licenza del progetto. Vuota = "da definire". */
-  license: '',
+  license: 'GPL-3.0',
   /** Frase sotto l'immagine (in corsivo). Vuota = non mostrata. */
   incipit:
     'Oh, gioveni! Quando vi dico "sequitemi miei pugnaci", dovete sequire et pugnare! Poche fotte! Se no qui stiamo a prenderci per le natiche.',

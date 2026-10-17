@@ -6,6 +6,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
 ## [Unreleased]
 
 ### Added
+- **Licence**: PiCoXterm is now released under the GNU General Public License v3.0 (`GPL-3.0-only`); the full text is in `LICENSE` and the About dialog shows it.
 - **SFTP sessions**: a session type that connects over SSH without a shell (also works with SFTP-only accounts) and opens a file browser tab, with an optional start folder and "show hidden files". Jump hosts, passwords/keys/agent, host key checks and the built-in editor work as in SSH sessions. The "SFTP" entry of the new-session dialog is now enabled.
 - **Dual-pane view** in SFTP tabs: your computer on the left (starts in Documents, remembers the last folder, lists the drives on Windows), the server on the right. Send files and folders with the toolbar button, the context menu or by dragging between the panes, in both directions, using the same queue (parallel, pause/resume). Double-click a local file to open it with its program (scripts and executables are refused). The divider is draggable.
 - **FTP and FTPS sessions**: explicit FTPS (default), implicit FTPS and plain FTP, in the same dual-pane tab as SFTP (editor, transfers with pause/resume, drag between panes). A server certificate that cannot be verified is never accepted silently: a dialog shows its SHA-256 fingerprint and you choose *accept once*, *accept and save* (the fingerprint is stored in the session) or cancel; if a saved certificate later changes, you get a stronger warning. Plain FTP shows a warning banner.

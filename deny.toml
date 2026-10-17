@@ -38,6 +38,13 @@ allow = [
     "MPL-2.0",
     "BSL-1.0",
 ]
+# I crate del progetto sono GPL-3.0-only (D-30): solo loro, le dipendenze restano permissive.
+exceptions = [
+    { allow = ["GPL-3.0-only"], crate = "picoxterm" },
+    { allow = ["GPL-3.0-only"], crate = "pxt-core" },
+    { allow = ["GPL-3.0-only"], crate = "pxt-ssh" },
+    { allow = ["GPL-3.0-only"], crate = "pxt-fs" },
+]
 
 [bans]
 multiple-versions = "warn"
