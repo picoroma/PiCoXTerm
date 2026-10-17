@@ -17,7 +17,11 @@ const prod = { ...newSession(null), name: 'PROD srv', host: 'srv', username: 'u'
 prod.ui.color = '#c0392b'
 const test = { ...newSession(null), name: 'TEST srv', host: 'srv', username: 'u' }
 test.ui.color = '#2f6fed'
-let nodes: SessionNode[] = [root, pw, key, prod, test]
+const files = { ...newSession(root.id, 'sftp'), name: 'FILES srv (SFTP)', host: 'srv', username: 'u' }
+files.sftp = { startPath: '/home/u/projects', showHidden: false }
+files.ui.color = '#2e8b57'
+const filesPw = { ...newSession(null, 'sftp'), name: 'FILES password (SFTP)', host: '10.0.0.9', username: 'u' }
+let nodes: SessionNode[] = [root, pw, key, prod, test, files, filesPw]
 
 let nextCallback = 0
 const callbacks = new Map<number, (m: unknown) => void>()
@@ -257,6 +261,19 @@ const handlers: Record<string, (args: any) => unknown> = {
       return 1
     }
     throw 'password-required'
+  },
+  // Sessione SFTP finta: stessa logica di ssh_connect, senza terminale.
+  sftp_connect: async ({ request, onEvent }) => {
+    request = { ...request, host: request.host ?? (nodes.find((n) => n.id === request.sessionId) as any)?.host }
+    ;(window as any).__lastSftpConnect = request
+    if (request.host === 'srv') {
+      const connId = ++connSeq
+      eventChannels.set(connId, onEvent)
+      return connId
+    }
+    if (request.host === '10.0.0.9' && request.password === 'segreta') return ++connSeq
+    if (request.host === '10.0.0.9') throw 'password-required'
+    throw 'impossibile collegarsi'
   },
   'plugin:path|resolve_directory': () => 'C:\\Users\\mock',
   'plugin:path|join': ({ paths }) => paths.join('\\'),

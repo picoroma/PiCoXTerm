@@ -6,6 +6,7 @@
   import { FitAddon } from '@xterm/addon-fit'
   import { SearchAddon } from '@xterm/addon-search'
   import '@xterm/xterm/css/xterm.css'
+  import ConnectPrompts from './ConnectPrompts.svelte'
   import Modal from './Modal.svelte'
   import { t } from '../i18n'
   import { settings } from './settings.svelte'
@@ -51,14 +52,14 @@
   const PASSPHRASE_REQUIRED = 'passphrase-required'
   const HOSTKEY_CHANGED = 'hostkey-changed'
   let askKind = $state<'password' | 'passphrase'>('password')
+  /** L'utente ha chiesto di salvare la password appena digitata (si salva a connessione riuscita). */
+  let savePasswordChecked = false
 
   let error = $state('')
   let hostKeyPrompt = $state<Extract<TermEvent, { type: 'hostKey' }> | null>(null)
   let hostKeyChanged = $state<Extract<TermEvent, { type: 'hostKeyChanged' }> | null>(null)
   let pendingPaste = $state<string | null>(null)
   let askPassword = $state(false)
-  let passwordInput = $state('')
-  let savePasswordChecked = $state(false)
 
   let termEl: HTMLDivElement
   let searchInput = $state<HTMLInputElement>()
@@ -179,8 +180,6 @@
       status = 'closed'
       if (String(e) === PASSWORD_REQUIRED || String(e) === PASSPHRASE_REQUIRED) {
         askKind = String(e) === PASSPHRASE_REQUIRED ? 'passphrase' : 'password'
-        passwordInput = ''
-        savePasswordChecked = false
         askPassword = true
       } else if (String(e) === HOSTKEY_CHANGED) {
         error = t('hostKeyChangedShort')
@@ -196,12 +195,10 @@
     term.focus()
   }
 
-  async function submitPassword(e: Event) {
-    e.preventDefault()
-    const pw = passwordInput
-    passwordInput = ''
+  async function submitPassword(password: string, save: boolean) {
     askPassword = false
-    await connect(pw)
+    savePasswordChecked = save
+    await connect(password)
   }
 
   async function replyHostKey(decision: 'once' | 'save' | 'reject') {
@@ -360,29 +357,6 @@
   <div class="status">{t('cwd')}: {cwd || '—'}</div>
 </div>
 
-{#if askPassword}
-  <Modal
-    title={askKind === 'passphrase' ? t('passphrasePromptTitle') : t('passwordPromptTitle')}
-    onclose={() => (askPassword = false)}
-  >
-    <form id="pw-form" onsubmit={submitPassword}>
-      <input
-        type="password"
-        bind:value={passwordInput}
-        autocomplete="off"
-        aria-label={askKind === 'passphrase' ? t('passphrase') : t('password')}
-      />
-      {#if target.sessionId && savePassword}
-        <label class="check"><input type="checkbox" bind:checked={savePasswordChecked} /> {t('savePasswordToo')}</label>
-      {/if}
-    </form>
-    {#snippet actions()}
-      <button type="button" onclick={() => (askPassword = false)}>{t('cancel')}</button>
-      <button type="submit" form="pw-form" class="primary">{t('connect')}</button>
-    {/snippet}
-  </Modal>
-{/if}
-
 {#if pendingPaste !== null}
   <Modal title={t('pasteTitle')} onclose={() => confirmPaste(false)}>
     <p>{t('pasteBody', { n: pendingPaste.split('\n').length })}</p>
@@ -394,50 +368,18 @@
   </Modal>
 {/if}
 
-{#if hostKeyPrompt}
-  <Modal title={t('hostKeyTitle')} onclose={() => replyHostKey('reject')}>
-    <p>{t('hostKeyBody')}</p>
-    <dl>
-      <dt>{t('host')}</dt>
-      <dd>{hostKeyPrompt.host}:{hostKeyPrompt.port}</dd>
-      <dt>{t('keyType')}</dt>
-      <dd>{hostKeyPrompt.keyType}</dd>
-      <dt>{t('fingerprint')}</dt>
-      <dd class="mono">{hostKeyPrompt.fingerprint}</dd>
-    </dl>
-    {#snippet actions()}
-      <button onclick={() => replyHostKey('reject')}>{t('cancel')}</button>
-      <button onclick={() => replyHostKey('once')}>{t('acceptOnce')}</button>
-      <button class="primary" onclick={() => replyHostKey('save')}>{t('accept')}</button>
-    {/snippet}
-  </Modal>
-{/if}
-
-{#if hostKeyChanged}
-  <Modal title={t('hostKeyChangedTitle')} onclose={() => (hostKeyChanged = null)}>
-    <p class="alert">{t('hostKeyChangedBody')}</p>
-    <dl>
-      <dt>{t('host')}</dt>
-      <dd>{hostKeyChanged.host}:{hostKeyChanged.port}</dd>
-      <dt>{t('fingerprintSaved')}</dt>
-      <dd class="mono">{hostKeyChanged.expected}</dd>
-      <dt>{t('fingerprintReceived')}</dt>
-      <dd class="mono">{hostKeyChanged.got}</dd>
-    </dl>
-    <p class="dim">{t('hostKeyChangedHelp')}</p>
-    {#snippet actions()}
-      {#if onmanagehostkeys}
-        <button
-          onclick={() => {
-            hostKeyChanged = null
-            onmanagehostkeys()
-          }}>{t('manageHostKeys')}</button
-        >
-      {/if}
-      <button class="primary" onclick={() => (hostKeyChanged = null)}>{t('close')}</button>
-    {/snippet}
-  </Modal>
-{/if}
+<ConnectPrompts
+  hostKey={hostKeyPrompt}
+  {hostKeyChanged}
+  {askPassword}
+  {askKind}
+  canSave={!!target.sessionId && !!savePassword}
+  onreplyhostkey={replyHostKey}
+  ondismisshostkeychanged={() => (hostKeyChanged = null)}
+  onsubmitpassword={submitPassword}
+  oncancelpassword={() => (askPassword = false)}
+  {onmanagehostkeys}
+/>
 
 <style>
   .tab {
@@ -494,35 +436,6 @@
     background: var(--bg-elev);
     font-family: Consolas, monospace;
     font-size: 13px;
-  }
-  form {
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-  }
-  .check {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-  dt {
-    font-weight: 600;
-    margin-top: 8px;
-  }
-  dd {
-    margin: 0;
-  }
-  .mono {
-    font-family: Consolas, monospace;
-    word-break: break-all;
-  }
-  .alert {
-    margin-top: 0;
-    padding: 10px;
-    border-radius: 4px;
-    background: var(--danger);
-    color: #fff;
-    font-weight: 600;
   }
   .preview {
     max-height: 160px;

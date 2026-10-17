@@ -34,7 +34,7 @@ export interface Session {
   id: Uuid
   parentId: Uuid | null
   name: string
-  protocol: 'ssh'
+  protocol: 'ssh' | 'sftp'
   host: string
   port: number
   username: string
@@ -71,14 +71,14 @@ export function newFolder(name: string, parentId: Uuid | null): Folder {
   return { type: 'folder', id: crypto.randomUUID(), name, parentId }
 }
 
-export function newSession(parentId: Uuid | null): Session {
+export function newSession(parentId: Uuid | null, protocol: Session['protocol'] = 'ssh'): Session {
   const now = new Date().toISOString()
   return {
     type: 'session',
     id: crypto.randomUUID(),
     parentId,
     name: '',
-    protocol: 'ssh',
+    protocol,
     host: '',
     port: 22,
     username: '',

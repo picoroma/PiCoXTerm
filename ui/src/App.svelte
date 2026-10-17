@@ -5,6 +5,7 @@
   import SessionTree from './lib/SessionTree.svelte'
   import TerminalTab from './lib/TerminalTab.svelte'
   import EditorTab from './lib/EditorTab.svelte'
+  import SftpTab from './lib/SftpTab.svelte'
   import SettingsDialog from './lib/SettingsDialog.svelte'
   import AboutDialog from './lib/AboutDialog.svelte'
   import NewSessionDialog from './lib/NewSessionDialog.svelte'
@@ -22,8 +23,8 @@
 
   interface Tab {
     key: number
-    /** `terminal`: sessione SSH; `editor`: file remoto aperto nell'editor integrato (D-19). */
-    kind: 'terminal' | 'editor'
+    /** `terminal`: sessione SSH; `sftp`: sessione SFTP; `editor`: file remoto nell'editor integrato (D-19). */
+    kind: 'terminal' | 'sftp' | 'editor'
     title: string
     target: Target
     /** Collegamento SSH della scheda, per il pannello SFTP (aggiornato dalla scheda stessa). */
@@ -56,8 +57,13 @@
 
   const activeTab = $derived(tabs.find((x) => x.key === activeKey))
   /** Scheda a cui si riferisce il pannello SFTP: per un editor è il terminale della stessa connessione. */
+  // Una sessione SFTP ha il suo pannello nella scheda: quello della sidebar resta vuoto.
   const panelTab = $derived(
-    activeTab?.kind === 'editor' ? tabs.find((x) => x.kind === 'terminal' && x.connId === activeTab.connId) : activeTab,
+    activeTab?.kind === 'editor'
+      ? tabs.find((x) => x.kind === 'terminal' && x.connId === activeTab.connId)
+      : activeTab?.kind === 'sftp'
+        ? undefined
+        : activeTab,
   )
   const liveConnIds = $derived(
     tabs.filter((x) => x.kind === 'terminal').map((x) => x.connId).filter((id): id is number => id !== null),
@@ -136,7 +142,7 @@
       activeKey = same.key
       return
     }
-    const owner = tabs.find((x) => x.kind === 'terminal' && x.connId === connId)
+    const owner = tabs.find((x) => x.kind !== 'editor' && x.connId === connId)
     if (!owner) return
     const tab: Tab = { key: nextKey++, kind: 'editor', title: entry.name, target: owner.target, connId, cwd: '', status: 'connected', tracking: owner.tracking, editPath: entry.path, dirty: false }
     tabs.push(tab)
@@ -164,7 +170,20 @@
   }
 
   function openSession(s: Session) {
-    openTab(s.name, { sessionId: s.id })
+    if (s.protocol === 'sftp') openSftpTab(s)
+    else openTab(s.name, { sessionId: s.id })
+  }
+
+  function openSftpTab(s: Session) {
+    const tab: Tab = { key: nextKey++, kind: 'sftp', title: s.name, target: { sessionId: s.id }, connId: null, cwd: '', status: 'connecting', tracking: { state: 'off', shell: null, message: null }, editPath: '', dirty: false }
+    tabs.push(tab)
+    activeKey = tab.key
+  }
+
+  /** Dati di una sessione SFTP salvata (cartella iniziale, file nascosti). */
+  function sftpOptions(sessionId: Uuid | undefined) {
+    const n = sessionId ? nodes.find((x) => x.id === sessionId) : undefined
+    return n?.type === 'session' ? n.sftp : null
   }
 
   function quickConnect(e: Event) {
@@ -195,10 +214,10 @@
   }
 
   /** Dopo la scelta del protocollo si apre il modulo specifico (per ora solo SSH). */
-  function pickProtocol(_protocol: Protocol) {
+  function pickProtocol(protocol: Protocol) {
     const parentId = picking?.parentId ?? null
     picking = null
-    editing = { session: newSession(parentId), isNew: true }
+    editing = { session: newSession(parentId, protocol === 'sftp' ? 'sftp' : 'ssh'), isNew: true }
   }
 
   async function saveSession(s: Session, password: string | null, clearPassword: boolean) {
@@ -333,7 +352,7 @@
           style:border-top-color={sessionUi(tab.target.sessionId)?.color ?? undefined}
           role="presentation"
         >
-          <button role="tab" aria-selected={tab.key === activeKey} title={tab.kind === 'editor' ? tab.editPath : undefined} onclick={() => (activeKey = tab.key)}>{tab.kind === 'editor' ? '✎ ' : ''}{tab.title}{tab.dirty ? ' ●' : ''}</button>
+          <button role="tab" aria-selected={tab.key === activeKey} title={tab.kind === 'editor' ? tab.editPath : undefined} onclick={() => (activeKey = tab.key)}>{tab.kind === 'editor' ? '✎ ' : tab.kind === 'sftp' ? '⇄ ' : ''}{tab.title}{tab.dirty ? ' ●' : ''}</button>
           <button class="x" aria-label={t('closeTab')} title={t('closeTab')} onclick={() => requestClose(tab.key)}>×</button>
         </div>
       {/each}
@@ -343,6 +362,21 @@
       {#each tabs as tab (tab.key)}
         {#if tab.kind === 'editor' && tab.connId !== null}
           <EditorTab connId={tab.connId} path={tab.editPath} name={tab.title} active={tab.key === activeKey} bind:dirty={tab.dirty} />
+        {:else if tab.kind === 'sftp'}
+          <SftpTab
+            target={tab.target}
+            active={tab.key === activeKey}
+            startPath={sftpOptions(tab.target.sessionId)?.startPath ?? null}
+            showHidden={sftpOptions(tab.target.sessionId)?.showHidden ?? false}
+            sessionName={tab.title}
+            sessionColor={sessionUi(tab.target.sessionId)?.color ?? null}
+            bind:connId={tab.connId}
+            bind:status={tab.status}
+            onmanagehostkeys={() => (showSettings = true)}
+            onedit={openEditor}
+            onexternal={openWithSystem}
+            savePassword={tab.target.sessionId ? passwordSaver(tab.target.sessionId) : undefined}
+          />
         {:else}
         <TerminalTab
           target={tab.target}

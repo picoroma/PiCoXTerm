@@ -106,3 +106,54 @@ async fn the_shell_keeps_working_while_sftp_is_open() {
     assert!(!fs.list("/etc").await.unwrap().is_empty());
     shell.resize(100, 30).await.unwrap();
 }
+
+#[tokio::test]
+#[ignore = "richiede il container di testenv"]
+async fn sftp_only_connection_works_without_a_shell_and_through_a_jump_host() {
+    use pxt_ssh::connect_sftp;
+    let dir = std::env::temp_dir().join(format!("pxt-fs-sftponly-{}", std::process::id()));
+    let verifier: HostKeyVerifier =
+        Arc::new(|_| Box::pin(async { HostKeyDecision::AcceptAndSave }));
+    let hop = |port| Hop {
+        host: "127.0.0.1".into(),
+        port,
+        username: "test".into(),
+        auth: Credentials::Password("test".into()),
+    };
+
+    // Diretta.
+    let conn = connect_sftp(
+        vec![hop(2222)],
+        KnownHosts::new(dir.join("known_hosts")),
+        verifier.clone(),
+    )
+    .await
+    .expect("connessione SFTP");
+    let fs = SftpFs::connect(conn.open_sftp_stream().await.unwrap())
+        .await
+        .unwrap();
+    let home = fs.canonicalize(".").await.unwrap();
+    assert!(home.starts_with('/'), "{home}");
+    assert!(fs.list("/").await.unwrap().iter().any(|e| e.name == "etc"));
+    // Più canali SFTP sulla stessa connessione.
+    let again = SftpFs::connect(conn.open_sftp_stream().await.unwrap())
+        .await
+        .unwrap();
+    assert_eq!(again.canonicalize(".").await.unwrap(), home);
+    conn.close().await;
+
+    // Attraverso un jump host (lo stesso server, due salti).
+    let conn = connect_sftp(
+        vec![hop(2222), hop(2222)],
+        KnownHosts::new(dir.join("known_hosts")),
+        verifier,
+    )
+    .await
+    .expect("connessione SFTP con jump host");
+    let fs = SftpFs::connect(conn.open_sftp_stream().await.unwrap())
+        .await
+        .unwrap();
+    assert!(fs.canonicalize(".").await.unwrap().starts_with('/'));
+    conn.close().await;
+    let _ = std::fs::remove_dir_all(&dir);
+}

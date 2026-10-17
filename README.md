@@ -14,6 +14,8 @@ Current release: **0.1.0-beta.1** (Windows only, unsigned). See the [changelog](
 - **Host keys**: confirmation with fingerprint (accept once, accept and save, cancel); if a key changes the connection is blocked until the saved entry is removed
 - "Test connection" without opening a shell, reconnect in the same tab, Quick connect (`user@host:port`)
 
+**SFTP sessions**: connect over SSH without a shell and browse the server in a tab (same panel, editor and transfers as below).
+
 **SFTP panel** (same SSH connection, no second login)
 - Follows the terminal's current directory (OSC 7, with automatic injection for bash, zsh and tcsh) and takes the terminal to a folder ("go to this folder in the terminal")
 - Browse, upload and download files and folders (with a conflict dialog), four files at a time, with pause, resume and retry of failed files; drag and drop from Explorer, delete, rename, new folder, properties and chmod (recursive optional), copy path
@@ -22,7 +24,7 @@ Current release: **0.1.0-beta.1** (Windows only, unsigned). See the [changelog](
 - The panel shows the name and colour of the active SSH session
 
 **Sessions and settings**
-- Tree of folders and sessions with filter, drag and drop, duplicate; "New session" dialog with protocol picker (only SSH is available for now)
+- Tree of folders and sessions with filter, drag and drop, duplicate; "New session" dialog with protocol picker (SSH and SFTP are available)
 - Passwords and passphrases only in the system keyring, never in the JSON file
 - Per-session appearance: theme, font, background and tab colour (handy to tell PROD, TEST and DEV apart)
 - Themes (dark, light, Solarized, Dracula), font, scrollback and copy/paste options

@@ -260,6 +260,44 @@ pub async fn test_connection(
     Ok(TestReport { elapsed_ms })
 }
 
+/// Connessione SSH senza shell né terminale: serve solo ad aprire il sottosistema SFTP (sessioni
+/// SFTP, anche per server che non offrono una shell).
+#[derive(Clone)]
+pub struct SftpConnection {
+    handle: Arc<client::Handle<Client>>,
+    /// I jump host restano aperti finché esiste la connessione.
+    _upstream: Arc<Vec<client::Handle<Client>>>,
+}
+
+impl SftpConnection {
+    /// Apre un canale verso il sottosistema `sftp` (da dare a `pxt_fs::SftpFs::connect`).
+    pub async fn open_sftp_stream(&self) -> Result<russh::ChannelStream<client::Msg>, SshError> {
+        let channel = self.handle.channel_open_session().await?;
+        channel.request_subsystem(true, "sftp").await?;
+        Ok(channel.into_stream())
+    }
+
+    pub async fn close(&self) {
+        let _ = self
+            .handle
+            .disconnect(russh::Disconnect::ByApplication, "chiusura", "it")
+            .await;
+    }
+}
+
+/// Collega e autentica (jump host compresi) senza aprire alcuna shell.
+pub async fn connect_sftp(
+    hops: Vec<Hop>,
+    known: KnownHosts,
+    verifier: HostKeyVerifier,
+) -> Result<SftpConnection, SshError> {
+    let Chain { handle, upstream } = connect_chain(hops, &known, &verifier, None).await?;
+    Ok(SftpConnection {
+        handle: Arc::new(handle),
+        _upstream: Arc::new(upstream),
+    })
+}
+
 /// Apre la connessione, autentica, apre una shell con PTY.
 /// L'output arriva su `events`; l'input si invia con i metodi di [`Shell`].
 pub async fn connect_shell(

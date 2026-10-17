@@ -24,6 +24,9 @@
     onenabletracking,
     onedit,
     onexternal,
+    standalone = false,
+    startPath = null,
+    showHiddenInitial = false,
     sessionName = '',
     sessionColor = null,
   }: {
@@ -45,6 +48,11 @@
     onedit?: (connId: number, entry: SftpEntry) => void
     /** Apre un file con il programma di sistema (copia temporanea che si ricarica al salvataggio). */
     onexternal?: (connId: number, entry: SftpEntry) => void
+    /** Sessione SFTP: non c'è un terminale da seguire, né comandi da mandargli. */
+    standalone?: boolean
+    /** Cartella da aprire alla connessione (solo `standalone`; vuoto = home). */
+    startPath?: string | null
+    showHiddenInitial?: boolean
     /** Nome e colore della sessione SSH della scheda attiva, per capire a quale server appartengono i file. */
     sessionName?: string
     sessionColor?: string | null
@@ -66,8 +74,8 @@
   const MAX_EDIT_BYTES = 5 * 1024 * 1024
 
   let states = $state<Record<number, PanelState>>({})
-  let follow = $state(true)
-  let showHidden = $state(false)
+  let follow = $state(!untrack(() => standalone))
+  let showHidden = $state(untrack(() => showHiddenInitial))
   let filter = $state('')
   let sortKey = $state<SortKey>('name')
   let sortAsc = $state(true)
@@ -152,7 +160,13 @@
       // Se il terminale ha già comunicato la directory corrente si parte da lì, altrimenti dalla home.
       // (`cwd` si legge dopo l'attesa: nel frattempo il terminale può aver cambiato directory.)
       const home = await invoke<string>('sftp_home', { id })
-      await go(id, follow && cwd ? cwd : home)
+      if (standalone) {
+        await go(id, startPath || home)
+        // Cartella iniziale inesistente o non leggibile: si riparte dalla home.
+        if (startPath && states[id]?.error) await go(id, home)
+      } else {
+        await go(id, follow && cwd ? cwd : home)
+      }
     } catch (e) {
       st.error = String(e)
       st.loading = false
@@ -599,11 +613,14 @@
       <button type="button" title={t('downloadFolders')} aria-label={t('downloadFolders')} disabled={!cur || !hasDirs} onclick={() => downloadSelection('dir')}><Icon name="folder-down" /></button>
     </span>
     <span class="spacer"></span>
+    {#if !standalone}
     <span class="group" role="group" aria-label={t('terminal')}>
       <button type="button" title={t('cdHere')} aria-label={t('cdHere')} disabled={!cur} onclick={() => cur && void cdTerminal(cur.path)}><Icon name="terminal" /></button>
       <button type="button" title={t('reinjectTracking')} aria-label={t('reinjectTracking')} disabled={!cur} onclick={onenabletracking}><Icon name="target" /></button>
     </span>
+    {/if}
     <span class="group" role="group" aria-label={t('viewOptions')}>
+      {#if !standalone}
       <button
         type="button"
         class:on={follow}
@@ -612,6 +629,7 @@
         aria-label={t('followTerminal')}
         onclick={() => (follow = !follow)}><Icon name={follow ? 'lock' : 'unlock'} /></button
       >
+      {/if}
       <button type="button" class:on={showHidden} aria-pressed={showHidden} title={t('showHidden')} aria-label={t('showHidden')} onclick={() => (showHidden = !showHidden)}><Icon name={showHidden ? 'eye' : 'eye-off'} /></button>
       {#if onwiden}
         <button type="button" class:on={wide} aria-pressed={wide} title={wide ? t('narrow') : t('widen')} aria-label={wide ? t('narrow') : t('widen')} onclick={onwiden}><Icon name="arrows-h" /></button>
@@ -622,7 +640,7 @@
   {#if connId === null || !cur}
     <p class="empty">{t('sftpHint')}</p>
   {:else}
-    {#if follow && tracking.state !== 'active'}
+    {#if !standalone && follow && tracking.state !== 'active'}
       <div class="notice" role="status">
         {#if tracking.state === 'pending'}
           {t('trackingPending')}
@@ -703,7 +721,7 @@
       <button role="menuitem" onclick={() => pick(() => downloadSelection('dir'))}>{t('downloadFolders')}</button>
     {/if}
     {#if menu.entry}
-      {#if single?.kind === 'dir'}
+      {#if !standalone && single?.kind === 'dir'}
         <button role="menuitem" onclick={() => pick(() => single && void cdTerminal(single.path))}>{t('cdFolder')}</button>
       {/if}
       {#if onedit}
@@ -726,7 +744,9 @@
       <button role="menuitem" disabled={!single} onclick={() => pick(askProps)}>{t('properties')} <kbd>Alt+⏎</kbd></button>
     {/if}
     <hr />
-    <button role="menuitem" onclick={() => pick(() => cur && void cdTerminal(cur.path))}>{t('cdHere')}</button>
+    {#if !standalone}
+      <button role="menuitem" onclick={() => pick(() => cur && void cdTerminal(cur.path))}>{t('cdHere')}</button>
+    {/if}
     <button role="menuitem" onclick={() => pick(refreshCurrent)}>{t('refresh')}</button>
   </div>
 {/if}

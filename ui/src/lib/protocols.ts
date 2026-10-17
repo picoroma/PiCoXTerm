@@ -13,7 +13,7 @@ export interface ProtocolInfo {
 /** Ordine di presentazione. Nomi e descrizioni sono in i18n (`proto_<id>`, `proto_<id>_desc`). */
 export const PROTOCOLS: ProtocolInfo[] = [
   { id: 'ssh', icon: 'terminal', available: true },
-  { id: 'sftp', icon: 'folder-transfer', available: false },
+  { id: 'sftp', icon: 'folder-transfer', available: true },
   { id: 'ftp', icon: 'swap', available: false },
   { id: 's3', icon: 'cloud', available: false },
   { id: 'rdp', icon: 'monitor', available: false },

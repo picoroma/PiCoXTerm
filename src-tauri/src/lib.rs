@@ -37,6 +37,8 @@ struct AppState {
     data_dir: PathBuf,
     known_hosts: PathBuf,
     shells: Mutex<HashMap<u64, Shell>>,
+    /// Connessioni delle sessioni SFTP: senza shell, solo il sottosistema SFTP.
+    sftp_conns: Mutex<HashMap<u64, pxt_ssh::SftpConnection>>,
     /// Sessioni SFTP, una per connessione, aperte al primo uso sulla stessa connessione SSH.
     sftp: tokio::sync::Mutex<HashMap<u64, Arc<SftpFs>>>,
     /// Piani di trasferimento in attesa di conferma (una scelta sui conflitti) o di avvio.
@@ -63,6 +65,7 @@ impl AppState {
             known_hosts: data_dir.join("known_hosts"),
             data_dir,
             shells: Mutex::default(),
+            sftp_conns: Mutex::default(),
             sftp: tokio::sync::Mutex::default(),
             plans: Mutex::default(),
             jobs: Mutex::default(),
@@ -503,7 +506,7 @@ async fn session_test(
     session: Session,
     password: Option<String>,
 ) -> Result<TestResult, String> {
-    if session.protocol != Protocol::Ssh {
+    if !matches!(session.protocol, Protocol::Ssh | Protocol::Sftp) {
         return Ok(TestResult::new("error", "protocollo non ancora supportato"));
     }
     let nodes = state.sessions.list().await.map_err(err)?;
@@ -611,23 +614,29 @@ async fn session_test(
     })
 }
 
-#[allow(clippy::too_many_arguments)]
-#[tauri::command]
-async fn ssh_connect(
-    state: Shared<'_>,
+/// Tutto ciò che serve per collegarsi: destinazione, salti, contesto di audit e verifica della host key.
+struct Prepared {
+    dest: Endpoint,
+    hops: Vec<Hop>,
+    ctx: AuditCtx,
+    verifier: HostKeyVerifier,
+}
+
+/// Risolve la sessione (o l'host indicato a mano), le credenziali e i jump host, e prepara la verifica
+/// della host key, che passa dalla UI (`on_event`). `wanted`: il protocollo che la sessione deve avere.
+async fn prepare_connection(
+    state: &Arc<AppState>,
     request: ConnectRequest,
-    cols: u32,
-    rows: u32,
-    on_data: Channel<InvokeResponseBody>,
-    on_event: Channel<TermEvent>,
-) -> Result<u64, String> {
+    wanted: Protocol,
+    on_event: &Channel<TermEvent>,
+) -> Result<Prepared, String> {
     let nodes = state.sessions.list().await.map_err(err)?;
     let (dest, jump_ids) = match request.session_id {
         Some(id) => {
             let Some(SessionNode::Session(s)) = nodes.iter().find(|n| n.id() == id) else {
                 return Err("sessione non trovata".into());
             };
-            if s.protocol != Protocol::Ssh {
+            if s.protocol != wanted {
                 return Err("protocollo non ancora supportato".into());
             }
             (Endpoint::of(s), s.jump_hosts.clone())
@@ -649,17 +658,18 @@ async fn ssh_connect(
         return Err(format!("troppi jump host (massimo {MAX_JUMPS})"));
     }
 
-    let mut hops = jump_hops(&state, &nodes, &jump_ids).await?;
+    let mut hops = jump_hops(state, &nodes, &jump_ids).await?;
 
     // Destinazione: segreto fornito ora dall'utente, altrimenti quello nel keyring (se c'è).
     let secret = match request.password {
         Some(p) => Some(p),
-        None => stored_secret(&state, &dest.credential_ref).await?,
+        None => stored_secret(state, &dest.credential_ref).await?,
     };
-    let auth = build_credentials(dest.method, dest.key_path, secret).map_err(|e| match e {
-        CredError::NeedSecret => PASSWORD_REQUIRED.to_string(),
-        CredError::Other(m) => m,
-    })?;
+    let auth =
+        build_credentials(dest.method, dest.key_path.clone(), secret).map_err(|e| match e {
+            CredError::NeedSecret => PASSWORD_REQUIRED.to_string(),
+            CredError::Other(m) => m,
+        })?;
     let ctx = AuditCtx {
         host: dest.host.clone(),
         port: dest.port,
@@ -670,14 +680,14 @@ async fn ssh_connect(
             .collect(),
     };
     hops.push(Hop {
-        host: dest.host,
+        host: dest.host.clone(),
         port: dest.port,
-        username: dest.username,
+        username: dest.username.clone(),
         auth,
     });
 
     let verifier: HostKeyVerifier = {
-        let state = Arc::clone(&state);
+        let state = Arc::clone(state);
         let on_event = on_event.clone();
         let ctx = ctx.clone();
         Arc::new(move |info: HostKeyInfo| {
@@ -719,6 +729,79 @@ async fn ssh_connect(
             })
         })
     };
+    Ok(Prepared {
+        dest,
+        hops,
+        ctx,
+        verifier,
+    })
+}
+
+/// Registra il fallimento di una connessione e lo traduce nel codice d'errore letto dalla UI.
+fn connect_failure(
+    state: &AppState,
+    ctx: &AuditCtx,
+    on_event: &Channel<TermEvent>,
+    e: SshError,
+) -> String {
+    // La richiesta di passphrase non è un fallimento: l'utente la fornirà.
+    if let Some((host, port, expected, got)) = hostkey_changed(&e) {
+        state.audit(ctx, "hostkey_changed", Outcome::Failed, Some(e.to_string()));
+        let _ = on_event.send(TermEvent::HostKeyChanged {
+            host,
+            port,
+            expected,
+            got,
+        });
+        return HOSTKEY_CHANGED.to_string();
+    }
+    if !matches!(e, SshError::PassphraseRequired) {
+        state.audit(ctx, "connect", Outcome::Failed, Some(e.to_string()));
+    }
+    match e {
+        SshError::PassphraseRequired => PASSPHRASE_REQUIRED.to_string(),
+        other => other.to_string(),
+    }
+}
+
+/// Collega una sessione SFTP: autentica (jump host compresi) senza aprire alcuna shell.
+#[tauri::command]
+async fn sftp_connect(
+    state: Shared<'_>,
+    request: ConnectRequest,
+    on_event: Channel<TermEvent>,
+) -> Result<u64, String> {
+    let p = prepare_connection(&state, request, Protocol::Sftp, &on_event).await?;
+    let conn = pxt_ssh::connect_sftp(
+        p.hops,
+        KnownHosts::new(state.known_hosts.clone()),
+        p.verifier,
+    )
+    .await
+    .map_err(|e| connect_failure(&state, &p.ctx, &on_event, e))?;
+    state.audit(&p.ctx, "connect", Outcome::Ok, Some("sftp".into()));
+    let id = state.next_id();
+    state.sftp_conns.lock().unwrap().insert(id, conn);
+    state.conn_ctx.lock().unwrap().insert(id, p.ctx);
+    Ok(id)
+}
+
+#[allow(clippy::too_many_arguments)]
+#[tauri::command]
+async fn ssh_connect(
+    state: Shared<'_>,
+    request: ConnectRequest,
+    cols: u32,
+    rows: u32,
+    on_data: Channel<InvokeResponseBody>,
+    on_event: Channel<TermEvent>,
+) -> Result<u64, String> {
+    let Prepared {
+        dest,
+        hops,
+        ctx,
+        verifier,
+    } = prepare_connection(&state, request, Protocol::Ssh, &on_event).await?;
 
     let (ev_tx, mut ev_rx) = mpsc::channel::<ShellEvent>(64);
     let on_event_for_errors = on_event.clone();
@@ -761,30 +844,7 @@ async fn ssh_connect(
             state.audit(&ctx, "connect", Outcome::Ok, None);
             s
         }
-        Err(e) => {
-            // La richiesta di passphrase non è un fallimento: l'utente la fornirà.
-            if let Some((host, port, expected, got)) = hostkey_changed(&e) {
-                state.audit(
-                    &ctx,
-                    "hostkey_changed",
-                    Outcome::Failed,
-                    Some(e.to_string()),
-                );
-                let _ = on_event_for_errors.send(TermEvent::HostKeyChanged {
-                    host,
-                    port,
-                    expected,
-                    got,
-                });
-                return Err(HOSTKEY_CHANGED.to_string());
-            } else if !matches!(e, SshError::PassphraseRequired) {
-                state.audit(&ctx, "connect", Outcome::Failed, Some(e.to_string()));
-            }
-            return Err(match e {
-                SshError::PassphraseRequired => PASSPHRASE_REQUIRED.to_string(),
-                other => other.to_string(),
-            });
-        }
+        Err(e) => return Err(connect_failure(&state, &ctx, &on_event_for_errors, e)),
     };
 
     let id = state.next_id();
@@ -856,8 +916,17 @@ async fn sftp_for(state: &AppState, id: u64) -> Result<Arc<SftpFs>, String> {
     if let Some(fs) = open.get(&id) {
         return Ok(Arc::clone(fs));
     }
-    let shell = get_shell(state, id)?;
-    let stream = shell.open_sftp_stream().await.map_err(err)?;
+    let shell = state.shells.lock().unwrap().get(&id).cloned();
+    let stream = match shell {
+        Some(shell) => shell.open_sftp_stream().await.map_err(err)?,
+        None => {
+            let conn = state.sftp_conns.lock().unwrap().get(&id).cloned();
+            conn.ok_or_else(|| "sessione inesistente".to_string())?
+                .open_sftp_stream()
+                .await
+                .map_err(err)?
+        }
+    };
     let fs = Arc::new(SftpFs::connect(stream).await.map_err(err)?);
     open.insert(id, Arc::clone(&fs));
     Ok(fs)
@@ -1786,6 +1855,10 @@ async fn ssh_close(state: Shared<'_>, id: u64) -> Result<(), String> {
     if let Some(s) = shell {
         s.close().await;
     }
+    let conn = state.sftp_conns.lock().unwrap().remove(&id);
+    if let Some(c) = conn {
+        c.close().await;
+    }
     Ok(())
 }
 
@@ -1871,6 +1944,7 @@ pub fn run() {
             session_test,
             session_duplicate,
             ssh_connect,
+            sftp_connect,
             ssh_write,
             ssh_resize,
             ssh_close,

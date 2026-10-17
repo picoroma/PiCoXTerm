@@ -49,6 +49,10 @@
   )
   const jumpName = (id: string) => candidates.find((c) => c.id === id)?.name ?? `(${t('missingSession')})`
   const hasStoredSecret = initial.credentialRef !== null
+  /** Una sessione SFTP non ha terminale: niente tema, font e sfondo; ha invece una cartella iniziale. */
+  const isSftp = initial.protocol === 'sftp'
+  let startPath = $state(initial.sftp.startPath ?? '')
+  let showHidden = $state(initial.sftp.showHidden)
 
   const usesSecret = $derived(method === 'password' || method === 'key')
   const valid = $derived(
@@ -105,6 +109,7 @@
       username: username.trim(),
       auth: { method, keyPath: method === 'key' ? keyPath.trim() : null },
       jumpHosts: $state.snapshot(jumps),
+      sftp: { startPath: startPath.trim() || null, showHidden },
       notes,
       ui: {
         ...initial.ui,
@@ -144,7 +149,10 @@
   }
 </script>
 
-<Modal title={isNew ? t('newSession') : t('editSession')} onclose={oncancel}>
+<Modal
+  title={isSftp ? (isNew ? t('newSftpSession') : t('editSftpSession')) : isNew ? t('newSession') : t('editSession')}
+  onclose={oncancel}
+>
   <form id="session-form" onsubmit={submit}>
     <label>{t('name')}<input bind:value={name} placeholder={host} /></label>
     <div class="row">
@@ -211,8 +219,19 @@
       </div>
       {#if jumps.length > 0}<p class="hint">{t('jumpHint')}</p>{/if}
     </fieldset>
+    {#if isSftp}
+      <fieldset>
+        <legend>{t('sftp')}</legend>
+        <label>
+          {t('sftpStartPath')}
+          <input bind:value={startPath} placeholder="/home/utente" spellcheck="false" />
+        </label>
+        <label class="check"><input type="checkbox" bind:checked={showHidden} /> {t('showHidden')}</label>
+      </fieldset>
+    {/if}
     <fieldset>
       <legend>{t('appearance')}</legend>
+      {#if !isSftp}
       <label>
         {t('theme')}
         <select bind:value={uiTheme}>
@@ -226,9 +245,12 @@
         <label class="grow">{t('fontFamily')}<input bind:value={uiFontFamily} placeholder={t('inherit')} /></label>
         <label class="narrow">{t('fontSize')}<input type="number" min="8" max="32" bind:value={uiFontSize} placeholder="—" /></label>
       </div>
+      {/if}
       <div class="row center">
+        {#if !isSftp}
         <label class="check"><input type="checkbox" bind:checked={bgOn} /> {t('customBackground')}</label>
         <input type="color" bind:value={bgColor} disabled={!bgOn} aria-label={t('customBackground')} />
+        {/if}
         <label class="check"><input type="checkbox" bind:checked={colorOn} /> {t('tabColor')}</label>
         <input type="color" bind:value={tabColor} disabled={!colorOn} aria-label={t('tabColor')} />
       </div>

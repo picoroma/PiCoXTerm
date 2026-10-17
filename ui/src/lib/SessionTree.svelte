@@ -231,7 +231,7 @@
         oncontextmenu={(e) => openMenu(e, node)}
         onkeydown={(e) => onkey(e, node)}
       >
-        <span class="icon">{node.type === 'folder' ? (expanded ? '▾ 📂' : '▸ 📁') : '🖥'}</span>
+        <span class="icon">{node.type === 'folder' ? (expanded ? '▾ 📂' : '▸ 📁') : node.protocol === 'sftp' ? '🗂' : '🖥'}</span>
         {#if node.type === 'session' && node.ui.color}
           <span class="dot" style:background={node.ui.color}></span>
         {/if}
