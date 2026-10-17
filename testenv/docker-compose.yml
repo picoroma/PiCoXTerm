@@ -25,3 +25,22 @@ services:
     container_name: pxt-test-shells
     ports:
       - "127.0.0.1:2223:2222"
+
+  # Server FTP con TLS esplicito opzionale (certificato autofirmato generato all'avvio): prove di FTP e FTPS.
+  # Modo passivo sulle porte 30000-30009, tutte solo su loopback.
+  ftp:
+    image: stilliard/pure-ftpd:latest
+    container_name: pxt-test-ftp
+    environment:
+      - PUBLICHOST=127.0.0.1
+      - FTP_USER_NAME=test
+      - FTP_USER_PASS=test
+      - FTP_USER_HOME=/home/test
+      - FTP_PASSIVE_PORTS=30000:30009
+      - ADDED_FLAGS=--tls=1
+      - TLS_CN=localhost
+      - TLS_ORG=PiCoXterm test
+      - TLS_C=IT
+    ports:
+      - "127.0.0.1:2121:21"
+      - "127.0.0.1:30000-30009:30000-30009"

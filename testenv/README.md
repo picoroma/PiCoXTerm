@@ -10,6 +10,18 @@ docker compose up -d
 
 Ascolta su `127.0.0.1:2222`. Utente `test`, password `test`. Accetta anche le chiavi in `keys/authorized.pub`.
 
+## Server FTP e FTPS
+
+```
+docker compose up -d ftp
+```
+
+Ascolta su `127.0.0.1:2121` (utente `test`, password `test`), modo passivo sulle porte 30000-30009, TLS esplicito opzionale con certificato **autofirmato** generato all'avvio (la prima volta serve qualche decina di secondi). Prove: `cargo test -p pxt-fs --test ftp_e2e -- --ignored --test-threads=1`.
+
+## Server con più shell
+
+Servizio `ssh-shells` (porta 2223): utenti `bashuser`, `zshuser`, `tcshuser`, `ashuser` (password `test`); `bashuser` può usare `sudo`.
+
 ## Chiavi di prova
 
 Le chiavi non sono nel repository (cartella `keys/` ignorata da git). Per generarle:

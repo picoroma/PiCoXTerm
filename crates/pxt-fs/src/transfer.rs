@@ -717,20 +717,31 @@ async fn upload_file<F: RemoteFs>(
             src.seek(SeekFrom::Start(e.size - n as u64)).await?;
             src.read_exact(&mut local).await?;
             let mut remote = vec![0u8; n];
-            let mut r = fs.open_read_at(&part, e.size - n as u64).await?;
-            let same = r.read_exact(&mut remote).await.is_ok() && remote == local;
+            // Un server che non sa leggere da un punto (FTP senza REST) non permette la ripresa: si riparte da zero.
+            let same = match fs.open_read_at(&part, e.size - n as u64).await {
+                Ok(mut r) => r.read_exact(&mut remote).await.is_ok() && remote == local,
+                Err(_) => false,
+            };
             same.then_some(e.size)
         }
         _ => None,
     };
     state.add_partial(&part);
-    let mut writer = match resume_at {
-        Some(off) => {
+    let mut resumed = None;
+    if let Some(off) = resume_at {
+        // Se il server non sa scrivere da un punto, si ricomincia da capo.
+        if let Ok(w) = fs.open_write_at(&part, off).await {
             src.seek(SeekFrom::Start(off)).await?;
             shared.add_bytes(off);
-            fs.open_write_at(&part, off).await?
+            resumed = Some(w);
         }
-        None => fs.open_write(&part).await?,
+    }
+    let mut writer = match resumed {
+        Some(w) => w,
+        None => {
+            src.seek(SeekFrom::Start(0)).await?;
+            fs.open_write(&part).await?
+        }
     };
     let copied = pump(&mut src, &mut writer, control, shared).await;
     let finished = match copied {
@@ -804,11 +815,12 @@ async fn download_file<F: RemoteFs>(
             f.seek(SeekFrom::Start(len - n as u64)).await?;
             f.read_exact(&mut local).await?;
         }
-        let mut r = fs.open_read_at(&item.src, len - n as u64).await?;
-        let mut remote = vec![0u8; n];
-        if r.read_exact(&mut remote).await.is_ok() && remote == local {
-            resume_at = Some(len);
-            reader = Some(r); // già posizionato su `len`
+        if let Ok(mut r) = fs.open_read_at(&item.src, len - n as u64).await {
+            let mut remote = vec![0u8; n];
+            if r.read_exact(&mut remote).await.is_ok() && remote == local {
+                resume_at = Some(len);
+                reader = Some(r); // già posizionato su `len`
+            }
         }
     }
     state.add_partial(&part);

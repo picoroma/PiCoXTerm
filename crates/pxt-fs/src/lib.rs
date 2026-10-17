@@ -6,6 +6,8 @@ pub mod edit;
 mod entry;
 mod error;
 pub mod external;
+pub mod ftp;
+mod ftp_tls;
 pub mod local;
 pub mod names;
 pub mod ops;
@@ -14,6 +16,7 @@ pub mod transfer;
 
 pub use entry::{Entry, EntryKind, FsCapabilities};
 pub use error::FsError;
+pub use ftp::{FtpFs, FtpParams, FtpSecurity};
 pub use local::LocalFs;
 pub use sftp::SftpFs;
 

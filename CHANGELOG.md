@@ -8,6 +8,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
 ### Added
 - **SFTP sessions**: a session type that connects over SSH without a shell (also works with SFTP-only accounts) and opens a file browser tab, with an optional start folder and "show hidden files". Jump hosts, passwords/keys/agent, host key checks and the built-in editor work as in SSH sessions. The "SFTP" entry of the new-session dialog is now enabled.
 - **Dual-pane view** in SFTP tabs: your computer on the left (starts in Documents, remembers the last folder, lists the drives on Windows), the server on the right. Send files and folders with the toolbar button, the context menu or by dragging between the panes, in both directions, using the same queue (parallel, pause/resume). Double-click a local file to open it with its program (scripts and executables are refused). The divider is draggable.
+- Internal: FTP/FTPS backend (explicit and implicit TLS, certificate pinning, connection pool, resumable transfers). Not available in the interface yet.
 - Local file system backend (`LocalFs`); recursive deletes now refuse Windows drive roots too.
 - Transfers copy up to four files at a time per job (200 small files: 1.6 s → 0.4 s against the test server).
 - Pause and resume for transfers: pausing keeps the partial files, resuming continues from where each file stopped (checked against the original) and skips files already finished. Failed files can be retried. Cancelling still deletes partial files.
