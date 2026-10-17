@@ -26,7 +26,10 @@ ftpTls.credentialRef = { provider: 'local', id: 'f1' }
 const ftpPlain = { ...newSession(null, 'ftp'), name: 'FTP in chiaro', host: 'ftp.plain', port: 21, username: 'test' }
 ftpPlain.credentialRef = { provider: 'local', id: 'f2' }
 ftpPlain.ftp = { security: 'plain', pinnedCert: null, startPath: null, showHidden: false }
-let nodes: SessionNode[] = [root, pw, key, prod, test, files, filesPw, ftpTls, ftpPlain]
+const s3Test = { ...newSession(root.id, 's3'), name: 'S3 prova (S3)', host: 's3.amazonaws.com', port: 443, username: 'pxtaccess' }
+s3Test.credentialRef = { provider: 'local', id: 's1' }
+s3Test.s3 = { region: 'us-east-1', endpoint: 'http://127.0.0.1:9000', pathStyle: true, bucket: null, profile: null, showHidden: false }
+let nodes: SessionNode[] = [root, pw, key, prod, test, files, filesPw, ftpTls, ftpPlain, s3Test]
 
 let nextCallback = 0
 const callbacks = new Map<number, (m: unknown) => void>()
@@ -126,6 +129,18 @@ function runMockJob(rec: { plan: any; policy: string; step: number }, onEvent: s
   return jobId
 }
 
+// Account S3 finto: bucket, prefissi e oggetti.
+const s3Conns = new Set<number>()
+const s3d = (name: string, parent: string) => ({ ...d(name, parent), size: 0, modified: null, mode: null, owner: null, group: null, uid: null, gid: null })
+const s3f = (name: string, parent: string, size: number) => ({ ...f(name, parent, size), mode: null, owner: null, group: null, uid: null, gid: null })
+const fakeS3: Record<string, any[]> = {
+  '/': [s3d('backup-prod', '/'), s3d('media', '/')],
+  '/backup-prod': [s3d('2026', '/backup-prod'), s3f('LEGGIMI.txt', '/backup-prod', 120), s3f('dump.sql.gz', '/backup-prod', 73_000_000)],
+  '/backup-prod/2026': [s3f('ottobre.tar', '/backup-prod/2026', 9_000_000)],
+  '/media': [s3f('logo.png', '/media', 5400)],
+}
+const s3Info: Record<string, any> = {}
+
 const handlers: Record<string, (args: any) => unknown> = {
   settings_get: () => settings,
   session_test: ({ session }) => {
@@ -141,7 +156,30 @@ const handlers: Record<string, (args: any) => unknown> = {
   },
   ssh_resize: () => {},
   ssh_enable_cwd_tracking: () => ({ type: 'tracking', state: 'active', shell: '/bin/bash', message: null }),
-  sftp_home: () => '/home/u',
+  sftp_home: ({ id }) => (s3Conns.has(id) ? '/' : '/home/u'),
+  s3_connect: ({ request }) => {
+    ;(window as any).__lastS3Connect = request
+    const s: any = nodes.find((n) => n.id === request.sessionId)
+    if (!s.s3.profile && !request.password && !s.credentialRef) throw 'password-required'
+    const id = ++connSeq
+    s3Conns.add(id)
+    return id
+  },
+  s3_object_info: ({ path }) =>
+    (s3Info[path] ??= { size: 120, etag: 'd41d8cd98f00b204e9800998ecf8427e', modified: 1760100000, storageClass: 'STANDARD', contentType: 'text/plain', cacheControl: null, contentDisposition: null, contentEncoding: null, metadata: { progetto: 'picoxterm' }, versionId: null, encryption: null, tags: [['env', 'test']] }),
+  s3_set_headers: ({ path, headers }) => {
+    ;(window as any).__lastS3Headers = { path, headers }
+    Object.assign((s3Info[path] ??= {}), { contentType: headers.contentType, cacheControl: headers.cacheControl, metadata: headers.metadata })
+  },
+  s3_set_tags: ({ path, tags }) => {
+    ;(window as any).__lastS3Tags = { path, tags }
+    ;(s3Info[path] ??= {}).tags = tags
+  },
+  s3_set_storage_class: ({ path, class: c }) => {
+    ;(window as any).__lastS3Class = { path, c }
+    ;(s3Info[path] ??= {}).storageClass = c
+  },
+  s3_presign: ({ path, expiresSecs }) => `http://127.0.0.1:9000${path}?X-Amz-Expires=${expiresSecs}&X-Amz-Signature=fake`,
   // Operazioni di modifica sul filesystem finto
   sftp_delete: ({ paths }) => {
     const failed: any[] = []
@@ -235,7 +273,11 @@ const handlers: Record<string, (args: any) => unknown> = {
   local_tree_info: () => ({ files: 1, dirs: 1, bytes: 10, partial: false }),
   local_mkdir: ({ parent, name }) => `${parent}\\${name}`,
   local_rename: ({ path, newName }) => path.replace(/[^\\]+$/, newName),
-  sftp_list: ({ path }) => {
+  sftp_list: ({ id, path }) => {
+    if (s3Conns.has(id)) {
+      if (!(path in fakeS3)) throw `non trovato: ${path}`
+      return fakeS3[path]
+    }
     if (!(path in fakeFs)) throw `percorso non trovato: ${path}`
     return fakeFs[path]
   },

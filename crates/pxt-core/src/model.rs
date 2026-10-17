@@ -102,6 +102,41 @@ pub struct FtpOptions {
     pub show_hidden: bool,
 }
 
+/// Opzioni di una sessione S3. L'access key sta in `Session.username`, la chiave segreta nel keyring
+/// (`credential_ref`); con `profile` si usa invece un profilo AWS (anche SSO) e non servono chiavi.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct S3Options {
+    pub region: String,
+    /// Indirizzo del servizio per S3 compatibili (MinIO, RustFS...); vuoto per AWS.
+    #[serde(default)]
+    pub endpoint: Option<String>,
+    /// Indirizzi `endpoint/bucket` invece di `bucket.endpoint` (di norma serve per i servizi compatibili).
+    #[serde(default)]
+    pub path_style: bool,
+    /// "Bucket esterno": si lavora su un solo bucket, senza elencare quelli dell'account.
+    #[serde(default)]
+    pub bucket: Option<String>,
+    /// Profilo AWS (`~/.aws/config`); se presente non si usano access key e chiave segreta.
+    #[serde(default)]
+    pub profile: Option<String>,
+    #[serde(default)]
+    pub show_hidden: bool,
+}
+
+impl Default for S3Options {
+    fn default() -> Self {
+        Self {
+            region: "us-east-1".into(),
+            endpoint: None,
+            path_style: false,
+            bucket: None,
+            profile: None,
+            show_hidden: false,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SftpOptions {
@@ -181,6 +216,8 @@ pub struct Session {
     #[serde(default)]
     pub ftp: FtpOptions,
     #[serde(default)]
+    pub s3: S3Options,
+    #[serde(default)]
     pub ui: UiOptions,
     #[serde(default)]
     pub notes: String,
@@ -223,6 +260,7 @@ impl Session {
             ssh: SshOptions::default(),
             sftp: SftpOptions::default(),
             ftp: FtpOptions::default(),
+            s3: S3Options::default(),
             ui: UiOptions::default(),
             notes: String::new(),
             created_at: now,

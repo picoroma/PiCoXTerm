@@ -15,7 +15,7 @@ export const PROTOCOLS: ProtocolInfo[] = [
   { id: 'ssh', icon: 'terminal', available: true },
   { id: 'sftp', icon: 'folder-transfer', available: true },
   { id: 'ftp', icon: 'swap', available: true },
-  { id: 's3', icon: 'cloud', available: false },
+  { id: 's3', icon: 'cloud', available: true },
   { id: 'rdp', icon: 'monitor', available: false },
   { id: 'vnc', icon: 'monitor-cursor', available: false },
 ]

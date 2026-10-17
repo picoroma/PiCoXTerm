@@ -127,7 +127,7 @@ Attività:
 1. Modalità **doppio pannello** (locale ↔ remoto) del file browser. **Fatto** nella scheda SFTP (trasferimenti con pulsante, menu e trascinamento); resta da usarlo anche per FTP/FTPS e S3.
 2. Sessione **SFTP** standalone (riusa `pxt-ssh` + backend SFTP). **Fatto** (connessione senza shell, scheda con il pannello).
 3. Backend **FTP/FTPS** con suppaftp: TLS esplicito/implicito, passivo, MLSD/LIST, pin dei certificati, avviso per FTP in chiaro. **Fatto** (D-25, D-26): backend, sessione, finestra del certificato, avviso per il chiaro.
-4. Backend **S3**: profili AWS (incluso SSO), access key nel keyring, elenco bucket, endpoint personalizzato (MinIO), multipart, classe di storage.
+4. Backend **S3**: profili AWS (incluso SSO), access key nel keyring, elenco bucket, endpoint personalizzato (MinIO), multipart, classe di storage. **Fatto** (D-28, D-29): backend e sessione S3 con vista a pannello singolo, intestazioni, tag, classe di storage, link pre-firmato, anteprima; provato su RustFS. Resta da provare con un profilo SSO reale; rinviati versioni, ACL, creazione/eliminazione bucket.
 5. `capabilities()` per nascondere le funzioni non supportate (per esempio chmod su S3).
 6. `policy.json`: prima implementazione (protocolli consentiti, FTP in chiaro). **Fatto** (D-26).
 

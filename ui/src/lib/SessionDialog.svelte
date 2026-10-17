@@ -53,8 +53,14 @@
   const hasStoredSecret = initial.credentialRef !== null
   /** Una sessione SFTP non ha terminale: niente tema, font e sfondo; ha invece una cartella iniziale. */
   const isFtp = initial.protocol === 'ftp'
+  const isS3 = initial.protocol === 's3'
   /** Sessione che apre un file browser (SFTP o FTP): niente terminale, tema e font. */
-  const isSftp = initial.protocol === 'sftp' || isFtp
+  const isSftp = initial.protocol === 'sftp' || isFtp || isS3
+  let s3Region = $state(initial.s3.region)
+  let s3Endpoint = $state(initial.s3.endpoint ?? '')
+  let s3PathStyle = $state(initial.s3.pathStyle)
+  let s3Bucket = $state(initial.s3.bucket ?? '')
+  let s3Profile = $state(initial.s3.profile ?? '')
   let startPath = $state((isFtp ? initial.ftp.startPath : initial.sftp.startPath) ?? '')
   let showHidden = $state(isFtp ? initial.ftp.showHidden : initial.sftp.showHidden)
   let ftpSecurity = $state(initial.ftp.security)
@@ -74,15 +80,28 @@
     ftpSecurity = next
   }
 
-  const usesSecret = $derived(isFtp || method === 'password' || method === 'key')
+  const usesSecret = $derived(isFtp || (isS3 && s3Profile.trim() === '') || (!isS3 && (method === 'password' || method === 'key')))
   const valid = $derived(
-    host.trim() !== '' &&
-      username.trim() !== '' &&
-      Number.isInteger(port) &&
-      port >= 1 &&
-      port <= 65535 &&
-      (isFtp || method !== 'key' || keyPath.trim() !== ''),
+    isS3
+      ? s3Region.trim() !== '' && (s3Profile.trim() !== '' || username.trim() !== '')
+      : host.trim() !== '' &&
+          username.trim() !== '' &&
+          Number.isInteger(port) &&
+          port >= 1 &&
+          port <= 65535 &&
+          (isFtp || method !== 'key' || keyPath.trim() !== ''),
   )
+
+  /** Per S3 `host` e `port` servono solo a riconoscere la sessione nell'elenco. */
+  function s3Host(): string {
+    const e = s3Endpoint.trim()
+    if (!e) return 's3.amazonaws.com'
+    try {
+      return new URL(e).host
+    } catch {
+      return e
+    }
+  }
 
   /** Cartella da cui aprire il selettore: quella della chiave attuale, altrimenti `~/.ssh`. */
   async function startFolder(): Promise<string | undefined> {
@@ -123,16 +142,26 @@
   function draft(): Session {
     return {
       ...initial,
-      name: name.trim() || host.trim(),
-      host: host.trim(),
-      port,
+      name: name.trim() || (isS3 ? (s3Bucket.trim() ? `s3://${s3Bucket.trim()}` : s3Host()) : host.trim()),
+      host: isS3 ? s3Host() : host.trim(),
+      port: isS3 ? 443 : port,
       username: username.trim(),
-      auth: { method: isFtp ? 'password' : method, keyPath: !isFtp && method === 'key' ? keyPath.trim() : null },
+      auth: { method: isFtp || isS3 ? 'password' : method, keyPath: !isFtp && !isS3 && method === 'key' ? keyPath.trim() : null },
       jumpHosts: $state.snapshot(jumps),
       sftp: initial.protocol === 'sftp' ? { startPath: startPath.trim() || null, showHidden } : initial.sftp,
       ftp: isFtp
         ? { security: ftpSecurity, pinnedCert: pinnedCert, startPath: startPath.trim() || null, showHidden }
         : initial.ftp,
+      s3: isS3
+        ? {
+            region: s3Region.trim(),
+            endpoint: s3Endpoint.trim() || null,
+            pathStyle: s3PathStyle,
+            bucket: s3Bucket.trim() || null,
+            profile: s3Profile.trim() || null,
+            showHidden: initial.s3.showHidden,
+          }
+        : initial.s3,
       notes,
       ui: {
         ...initial.ui,
@@ -173,16 +202,35 @@
 </script>
 
 <Modal
-  title={isFtp ? (isNew ? t('newFtpSession') : t('editFtpSession')) : isSftp ? (isNew ? t('newSftpSession') : t('editSftpSession')) : isNew ? t('newSession') : t('editSession')}
+  title={isS3 ? (isNew ? t('newS3Session') : t('editS3Session')) : isFtp ? (isNew ? t('newFtpSession') : t('editFtpSession')) : isSftp ? (isNew ? t('newSftpSession') : t('editSftpSession')) : isNew ? t('newSession') : t('editSession')}
   onclose={oncancel}
 >
   <form id="session-form" onsubmit={submit}>
-    <label>{t('name')}<input bind:value={name} placeholder={host} /></label>
+    <label>{t('name')}<input bind:value={name} placeholder={isS3 ? s3Host() : host} /></label>
+    {#if isS3}
+      <div class="row">
+        <label class="grow">{t('s3Region')}<input bind:value={s3Region} required spellcheck="false" /></label>
+      </div>
+      <label>
+        {t('s3Endpoint')}
+        <input bind:value={s3Endpoint} placeholder="https://s3.example.com" spellcheck="false" />
+      </label>
+      <p class="hint">{t('s3EndpointHint')}</p>
+      <label class="check"><input type="checkbox" bind:checked={s3PathStyle} /> {t('s3PathStyle')}</label>
+      <label>{t('s3Bucket')}<input bind:value={s3Bucket} spellcheck="false" /></label>
+      <p class="hint">{t('s3BucketHint')}</p>
+      <label>{t('s3Profile')}<input bind:value={s3Profile} spellcheck="false" /></label>
+      <p class="hint">{t('s3ProfileHint')}</p>
+      {#if s3Profile.trim() === ''}
+        <label>{t('s3AccessKey')}<input bind:value={username} autocomplete="off" spellcheck="false" /></label>
+      {/if}
+    {:else}
     <div class="row">
       <label class="grow">{t('host')}<input bind:value={host} required /></label>
       <label class="narrow">{t('port')}<input type="number" min="1" max="65535" bind:value={port} required /></label>
     </div>
     <label>{t('user')}<input bind:value={username} required autocomplete="off" /></label>
+    {/if}
     {#if isFtp}
       <label>
         {t('ftpSecurity')}
@@ -202,7 +250,7 @@
           <button type="button" onclick={() => (pinnedCert = null)}>{t('ftpForgetCert')}</button>
         </div>
       {/if}
-    {:else}
+    {:else if !isS3}
     <label>
       {t('authMethod')}
       <select bind:value={method}>
@@ -226,14 +274,16 @@
     {/if}
     {#if usesSecret}
       <label>
-        {method === 'key' ? t('passphrase') : t('password')}
+        {isS3 ? t('s3SecretKey') : method === 'key' ? t('passphrase') : t('password')}
         <input
           type="password"
           bind:value={secret}
           autocomplete="new-password"
           placeholder={hasStoredSecret
             ? t('secretSaved')
-            : method === 'key'
+            : isS3
+              ? t('s3SecretNone')
+              : method === 'key'
               ? t('passphraseNone')
               : t('passwordNone')}
         />
@@ -242,7 +292,7 @@
     {#if hasStoredSecret}
       <label class="check"><input type="checkbox" bind:checked={clearSecret} /> {t('clearPassword')}</label>
     {/if}
-    {#if !isFtp}
+    {#if !isFtp && !isS3}
     <fieldset>
       <legend>{t('jumpHosts')}</legend>
       {#each jumps as id, i (id)}
@@ -265,7 +315,7 @@
       {#if jumps.length > 0}<p class="hint">{t('jumpHint')}</p>{/if}
     </fieldset>
     {/if}
-    {#if isSftp}
+    {#if isSftp && !isS3}
       <fieldset>
         <legend>{isFtp ? 'FTP' : t('sftp')}</legend>
         <label>

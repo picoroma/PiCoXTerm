@@ -170,7 +170,7 @@
   }
 
   function openSession(s: Session) {
-    if (s.protocol === 'sftp' || s.protocol === 'ftp') openSftpTab(s)
+    if (s.protocol === 'sftp' || s.protocol === 'ftp' || s.protocol === 's3') openSftpTab(s)
     else openTab(s.name, { sessionId: s.id })
   }
 
@@ -184,6 +184,7 @@
   function sftpOptions(sessionId: Uuid | undefined) {
     const n = sessionId ? nodes.find((x) => x.id === sessionId) : undefined
     if (n?.type !== 'session') return null
+    if (n.protocol === 's3') return { startPath: n.s3.bucket ? `/${n.s3.bucket}` : null, showHidden: n.s3.showHidden }
     return n.protocol === 'ftp' ? n.ftp : n.sftp
   }
 
@@ -236,10 +237,11 @@
   function pickProtocol(protocol: Protocol) {
     const parentId = picking?.parentId ?? null
     picking = null
-    const kind = protocol === 'sftp' || protocol === 'ftp' ? protocol : 'ssh'
+    const kind = protocol === 'sftp' || protocol === 'ftp' || protocol === 's3' ? protocol : 'ssh'
     const s = newSession(parentId, kind)
     // FTP: porta abituale del tipo di protezione predefinito (FTPS esplicito, 21).
     if (kind === 'ftp') s.port = 21
+    if (kind === 's3') s.port = 443
     editing = { session: s, isNew: true }
   }
 
@@ -389,7 +391,7 @@
           <SftpTab
             target={tab.target}
             active={tab.key === activeKey}
-            protocol={sessionProtocol(tab.target.sessionId) === 'ftp' ? 'ftp' : 'sftp'}
+            protocol={sessionProtocol(tab.target.sessionId) === 's3' ? 's3' : sessionProtocol(tab.target.sessionId) === 'ftp' ? 'ftp' : 'sftp'}
             plainFtp={sessionProtocol(tab.target.sessionId) === 'ftp' && (nodes.find((x) => x.id === tab.target.sessionId) as Session | undefined)?.ftp.security === 'plain'}
             onpincert={tab.target.sessionId ? certPinner(tab.target.sessionId) : undefined}
             startPath={sftpOptions(tab.target.sessionId)?.startPath ?? null}

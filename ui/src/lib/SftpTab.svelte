@@ -3,6 +3,7 @@
   import { Channel, invoke } from '@tauri-apps/api/core'
   import ConnectPrompts, { type CertRequest, type HostKeyChange, type HostKeyRequest } from './ConnectPrompts.svelte'
   import DualPane from './DualPane.svelte'
+  import S3Pane from './S3Pane.svelte'
   import { t } from '../i18n'
   import type { SftpEntry, Target } from './types'
 
@@ -32,7 +33,7 @@
     target: Target
     active: boolean
     /** `ftp`: sessione FTP o FTPS (comando `ftp_connect`, conferma del certificato). */
-    protocol?: 'sftp' | 'ftp'
+    protocol?: 'sftp' | 'ftp' | 's3'
     /** FTP senza cifratura: si avvisa che password e dati viaggiano in chiaro. */
     plainFtp?: boolean
     /** Salva nella sessione l'impronta del certificato che l'utente ha accettato. */
@@ -77,7 +78,11 @@
     }
     try {
       connId =
-        protocol === 'ftp'
+        protocol === 's3'
+          ? await invoke<number>('s3_connect', {
+              request: { sessionId: target.sessionId, password: password ?? null },
+            })
+          : protocol === 'ftp'
           ? await invoke<number>('ftp_connect', {
               request: { sessionId: target.sessionId, password: password ?? null, pinnedCert: pinnedCert ?? null },
               onEvent,
@@ -165,7 +170,7 @@
 <div class="tab" class:hidden={!active}>
   <div class="tools">
     {#if status === 'connected'}
-      <span class="dim">{protocol === 'ftp' ? t('ftpConnected') : t('sftpConnected')}</span>
+      <span class="dim">{protocol === 's3' ? t('s3Connected') : protocol === 'ftp' ? t('ftpConnected') : t('sftpConnected')}</span>
       <button type="button" onclick={disconnect}>{t('disconnect')}</button>
     {:else if status === 'connecting'}
       <span class="dim">{t('connecting')}</span>
@@ -179,7 +184,9 @@
   {#if error}<div class="error">{error}</div>{/if}
 
   <div class="panel">
-    {#if connId !== null}
+    {#if connId !== null && protocol === 's3'}
+      <S3Pane {connId} {startPath} {showHidden} {sessionName} {sessionColor} />
+    {:else if connId !== null}
       <DualPane
         {connId}
         {startPath}

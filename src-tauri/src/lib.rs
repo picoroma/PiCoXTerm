@@ -13,7 +13,7 @@ use pxt_fs::external as fs_external;
 use pxt_fs::ops as fs_ops;
 use pxt_fs::transfer as fs_transfer;
 use pxt_fs::transfer::{ConflictPolicy, Progress};
-use pxt_fs::{AnyFs, Entry, FtpFs, FtpParams, RemoteFs, SftpFs};
+use pxt_fs::{AnyFs, Entry, FtpFs, FtpParams, RemoteFs, S3Fs, S3Params, SftpFs};
 use pxt_ssh::{
     ConnectParams, Credentials, Hop, HostKeyDecision, HostKeyInfo, HostKeyVerifier, KnownHosts,
     Shell, ShellEvent, SshError,
@@ -525,6 +525,9 @@ async fn session_test(
 ) -> Result<TestResult, String> {
     if session.protocol == Protocol::Ftp {
         return Ok(ftp_test(&state, &session, password).await);
+    }
+    if session.protocol == Protocol::S3 {
+        return Ok(s3_test(&state, &session, password).await);
     }
     if !matches!(session.protocol, Protocol::Ssh | Protocol::Sftp) {
         return Ok(TestResult::new("error", "protocollo non ancora supportato"));
@@ -1134,6 +1137,246 @@ async fn ftp_test(
         }
         Err(e) => TestResult::new("error", e.to_string()),
     }
+}
+
+// ---- Sessioni S3 ----
+
+fn s3_policy_check(state: &AppState) -> Result<(), String> {
+    if !state.policy.allows(Protocol::S3) {
+        return Err("Il protocollo S3 è vietato dalla policy dell'organizzazione.".into());
+    }
+    Ok(())
+}
+
+/// Parametri di una sessione S3. Con un profilo AWS non servono chiavi; altrimenti manca la chiave
+/// segreta → `Err(PASSWORD_REQUIRED)`.
+async fn s3_params(
+    state: &AppState,
+    session: &Session,
+    secret: Option<String>,
+) -> Result<S3Params, String> {
+    let o = &session.s3;
+    let non_empty = |v: &Option<String>| v.clone().filter(|s| !s.trim().is_empty());
+    let (access_key, secret_key) = if non_empty(&o.profile).is_some() {
+        (None, None)
+    } else {
+        let secret = match secret {
+            Some(p) => Some(p),
+            None => stored_secret(state, &session.credential_ref).await?,
+        };
+        match secret {
+            Some(p) => (Some(session.username.clone()), Some(p)),
+            None => return Err(PASSWORD_REQUIRED.to_string()),
+        }
+    };
+    Ok(S3Params {
+        endpoint: non_empty(&o.endpoint),
+        region: o.region.clone(),
+        access_key,
+        secret_key,
+        session_token: None,
+        profile: non_empty(&o.profile),
+        path_style: o.path_style,
+        bucket: non_empty(&o.bucket),
+    })
+}
+
+fn find_s3_session(nodes: &[SessionNode], id: Uuid) -> Result<Session, String> {
+    match nodes.iter().find(|n| n.id() == id) {
+        Some(SessionNode::Session(s)) if s.protocol == Protocol::S3 => Ok((**s).clone()),
+        Some(_) => Err("la sessione non è una sessione S3".into()),
+        None => Err("sessione non trovata".into()),
+    }
+}
+
+fn s3_audit_ctx(session: &Session) -> AuditCtx {
+    AuditCtx {
+        host: session
+            .s3
+            .endpoint
+            .clone()
+            .filter(|e| !e.is_empty())
+            .unwrap_or_else(|| "aws".into()),
+        port: session.port,
+        user: session.username.clone(),
+        via: Vec::new(),
+        protocol: "s3",
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct S3ConnectRequest {
+    session_id: Uuid,
+    /// Chiave segreta digitata ora dall'utente (ha la precedenza su quella nel keyring).
+    password: Option<String>,
+}
+
+/// Collega una sessione S3: da qui in poi la connessione si usa con gli stessi comandi `sftp_*`.
+#[tauri::command]
+async fn s3_connect(state: Shared<'_>, request: S3ConnectRequest) -> Result<u64, String> {
+    let nodes = state.sessions.list().await.map_err(err)?;
+    let session = find_s3_session(&nodes, request.session_id)?;
+    let ctx = s3_audit_ctx(&session);
+    if let Err(reason) = s3_policy_check(&state) {
+        state.audit(
+            &ctx,
+            "connect",
+            Outcome::Failed,
+            Some("vietato dalla policy".into()),
+        );
+        return Err(reason);
+    }
+    let params = s3_params(&state, &session, request.password).await?;
+    match S3Fs::connect(params).await {
+        Ok(fs) => {
+            state.audit(&ctx, "connect", Outcome::Ok, Some("s3".into()));
+            let id = state.next_id();
+            state.sftp.lock().await.insert(id, Arc::new(AnyFs::S3(fs)));
+            state.conn_ctx.lock().unwrap().insert(id, ctx);
+            Ok(id)
+        }
+        Err(e) => {
+            state.audit(&ctx, "connect", Outcome::Failed, Some(e.to_string()));
+            Err(e.to_string())
+        }
+    }
+}
+
+async fn s3_test(state: &Arc<AppState>, session: &Session, secret: Option<String>) -> TestResult {
+    if let Err(reason) = s3_policy_check(state) {
+        return TestResult::new("error", reason);
+    }
+    let params = match s3_params(state, session, secret.filter(|p| !p.is_empty())).await {
+        Ok(p) => p,
+        Err(e) if e == PASSWORD_REQUIRED => {
+            return TestResult::new(
+                "needSecret",
+                "Inserisci la chiave segreta nel campo per provare la connessione.",
+            )
+        }
+        Err(e) => return TestResult::new("error", e),
+    };
+    let started = std::time::Instant::now();
+    match S3Fs::connect(params).await {
+        Ok(_) => {
+            let mut r = TestResult::new("ok", "Connessione e autenticazione riuscite.");
+            r.elapsed_ms = u64::try_from(started.elapsed().as_millis()).ok();
+            r
+        }
+        Err(e) => TestResult::new("error", e.to_string()),
+    }
+}
+
+/// Il filesystem S3 di una connessione; errore se la connessione è di un altro tipo.
+async fn s3_for(state: &AppState, id: u64) -> Result<Arc<AnyFs>, String> {
+    let fs = sftp_for(state, id).await?;
+    match &*fs {
+        AnyFs::S3(_) => Ok(fs),
+        _ => Err("la connessione non è S3".into()),
+    }
+}
+
+macro_rules! with_s3 {
+    ($fs:expr, $s3:ident => $body:expr) => {
+        match &*$fs {
+            AnyFs::S3($s3) => $body,
+            _ => unreachable!("controllato da s3_for"),
+        }
+    };
+}
+
+/// Proprietà, intestazioni, metadati e tag di un oggetto.
+#[tauri::command]
+async fn s3_object_info(
+    state: Shared<'_>,
+    id: u64,
+    path: String,
+) -> Result<pxt_fs::ObjectInfo, String> {
+    let fs = s3_for(&state, id).await?;
+    with_s3!(fs, s3 => s3.object_info(&path).await.map_err(err))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct S3HeadersArg {
+    content_type: Option<String>,
+    cache_control: Option<String>,
+    content_disposition: Option<String>,
+    content_encoding: Option<String>,
+    #[serde(default)]
+    metadata: HashMap<String, String>,
+}
+
+#[tauri::command]
+async fn s3_set_headers(
+    state: Shared<'_>,
+    id: u64,
+    path: String,
+    headers: S3HeadersArg,
+) -> Result<(), String> {
+    let fs = s3_for(&state, id).await?;
+    let blank = |v: Option<String>| v.filter(|s| !s.trim().is_empty());
+    let h = pxt_fs::ObjectHeaders {
+        content_type: blank(headers.content_type),
+        cache_control: blank(headers.cache_control),
+        content_disposition: blank(headers.content_disposition),
+        content_encoding: blank(headers.content_encoding),
+        metadata: headers.metadata,
+    };
+    with_s3!(fs, s3 => s3.set_headers(&path, &h).await.map_err(err))?;
+    audit_conn(&state, id, "s3_set_headers", true, "1 oggetto".into());
+    Ok(())
+}
+
+#[tauri::command]
+async fn s3_set_tags(
+    state: Shared<'_>,
+    id: u64,
+    path: String,
+    tags: Vec<(String, String)>,
+) -> Result<(), String> {
+    let fs = s3_for(&state, id).await?;
+    with_s3!(fs, s3 => s3.set_tags(&path, &tags).await.map_err(err))?;
+    audit_conn(
+        &state,
+        id,
+        "s3_set_tags",
+        true,
+        format!("{} tag", tags.len()),
+    );
+    Ok(())
+}
+
+#[tauri::command]
+async fn s3_set_storage_class(
+    state: Shared<'_>,
+    id: u64,
+    path: String,
+    class: String,
+) -> Result<(), String> {
+    let fs = s3_for(&state, id).await?;
+    with_s3!(fs, s3 => s3.set_storage_class(&path, &class).await.map_err(err))?;
+    audit_conn(&state, id, "s3_set_storage_class", true, class);
+    Ok(())
+}
+
+/// Indirizzo temporaneo di download (la firma è nell'indirizzo: va trattato come un segreto di breve durata).
+#[tauri::command]
+async fn s3_presign(
+    state: Shared<'_>,
+    id: u64,
+    path: String,
+    expires_secs: u64,
+) -> Result<String, String> {
+    let fs = s3_for(&state, id).await?;
+    let secs = expires_secs.clamp(60, 7 * 24 * 3600);
+    let url = with_s3!(fs, s3 => s3
+        .presigned_url(&path, std::time::Duration::from_secs(secs))
+        .await
+        .map_err(err))?;
+    audit_conn(&state, id, "s3_presign", true, format!("{secs} s"));
+    Ok(url)
 }
 
 /// Policy attiva e l'eventuale avviso (file non valido): la UI vi si adegua (per esempio nasconde l'FTP in chiaro).
@@ -2290,6 +2533,12 @@ pub fn run() {
             sessions_export,
             sessions_import,
             session_test,
+            s3_connect,
+            s3_object_info,
+            s3_set_headers,
+            s3_set_tags,
+            s3_set_storage_class,
+            s3_presign,
             session_duplicate,
             ssh_connect,
             sftp_connect,

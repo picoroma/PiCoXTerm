@@ -35,6 +35,9 @@
     path = $bindable(''),
     sessionName = '',
     sessionColor = null,
+    s3 = false,
+    onselect,
+    onpresign,
   }: {
     /** Connessione SSH della scheda attiva (null se non c'è o non è collegata). */
     connId: number | null
@@ -74,6 +77,12 @@
     /** Nome e colore della sessione SSH della scheda attiva, per capire a quale server appartengono i file. */
     sessionName?: string
     sessionColor?: string | null
+    /** Sessione S3: niente permessi/utente/gruppo; le proprietà stanno nel pannello a lato. */
+    s3?: boolean
+    /** La selezione è cambiata (per il pannello di dettaglio S3). */
+    onselect?: (entries: SftpEntry[]) => void
+    /** Chiede un link temporaneo per l'oggetto (S3). */
+    onpresign?: (entry: SftpEntry) => void
   } = $props()
 
   interface PanelState {
@@ -124,7 +133,7 @@
 
   /** Permessi, utente e gruppo: di norma visibili; il pulsante nella barra li nasconde. */
   let detailsChoice = $state<boolean | null>(null)
-  const details = $derived(!isLocal && (detailsChoice ?? true))
+  const details = $derived(!isLocal && !s3 && (detailsChoice ?? true))
   /** Larghezza del pannello: con poco spazio i dettagli vanno sotto il nome invece che in colonne. */
   let panelWidth = $state(0)
   const COLUMNS_MIN_WIDTH = 540
@@ -160,6 +169,10 @@
   const hasDirs = $derived(selectedEntries.some((e) => e.kind === 'dir'))
   /** L'unico elemento selezionato (Rinomina e Proprietà valgono solo per uno alla volta). */
   const single = $derived(selectedEntries.length === 1 ? selectedEntries[0] : null)
+  $effect(() => {
+    const list = selectedEntries
+    untrack(() => onselect?.(list))
+  })
 
   const rows = $derived.by(() => {
     if (!cur) return []
@@ -460,6 +473,10 @@
     const id = connId
     const dir = cur.path
     actionError = ''
+    if (s3 && dir === '/') {
+      actionError = t('s3OpenBucketFirst')
+      return
+    }
     try {
       const plan = await invoke<PlanSummary>('transfer_plan_upload', { id, localPaths: paths, remoteDir: dir })
       const title = t('uploadTitle', { n: plan.fileCount, size: fmtBytes(plan.totalBytes), dir })
@@ -515,6 +532,11 @@
   }
 
   /** Rilegge la cartella mostrata. */
+  /** Va a un percorso (per esempio a un bucket scelto nell'elenco a lato). */
+  export function goto(p: string) {
+    if (connId !== null) void go(connId, p)
+  }
+
   export function refresh() {
     refreshCurrent()
   }
@@ -601,7 +623,7 @@
   }
 
   function askProps() {
-    if (single) dialog = { type: 'props', entry: single }
+    if (single && !s3) dialog = { type: 'props', entry: single }
   }
 
   /** Limite per l'apertura con il programma di sistema (lo stesso del backend). */
@@ -617,6 +639,10 @@
 
   function copyPaths() {
     void writeText(selectedEntries.map((e) => e.path).join('\n'))
+  }
+
+  function copyS3Uri() {
+    void writeText(selectedEntries.map((e) => `s3:/${e.path}`).join('\n'))
   }
 
   // ---- Menu col tasto destro ----
@@ -760,7 +786,7 @@
 >
   {#if sessionName}
     <div class="caption" title={sessionName}>
-      <span class="label">{isLocal ? t('localPanel') : t('sftp')}</span>
+      <span class="label">{isLocal ? t('localPanel') : (s3 ? 'S3' : t('sftp'))}</span>
       <span class="nm">{sessionName}</span>
     </div>
   {/if}
@@ -944,7 +970,12 @@
       <button role="menuitem" class="danger-item" onclick={() => pick(askDelete)}>{t('delete')} <kbd>Canc</kbd></button>
       <hr />
       <button role="menuitem" onclick={() => pick(copyPaths)}>{t('copyPath')}</button>
-      <button role="menuitem" disabled={!single} onclick={() => pick(askProps)}>{t('properties')} <kbd>Alt+⏎</kbd></button>
+      {#if s3}
+        <button role="menuitem" onclick={() => pick(copyS3Uri)}>{t('s3CopyUri')}</button>
+        <button role="menuitem" disabled={!single || single.kind !== 'file'} onclick={() => pick(() => single && onpresign?.(single))}>{t('s3Presign')}</button>
+      {:else}
+        <button role="menuitem" disabled={!single} onclick={() => pick(askProps)}>{t('properties')} <kbd>Alt+⏎</kbd></button>
+      {/if}
     {/if}
     <hr />
     {#if !standalone && !isLocal}
