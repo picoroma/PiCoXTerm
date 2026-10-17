@@ -978,18 +978,13 @@ fn join_remote(dir: &str, name: &str) -> String {
     fs_transfer::remote_join(dir, name)
 }
 
-/// Elimina file e cartelle (con tutto il contenuto). I link simbolici non vengono mai seguiti.
-#[tauri::command]
-async fn sftp_delete(
-    state: Shared<'_>,
-    id: u64,
-    paths: Vec<String>,
-) -> Result<fs_ops::OpReport, String> {
-    let fs = sftp_for(&state, id).await?;
+/// Elimina file e cartelle (con tutto il contenuto) su un filesystem qualsiasi. I link simbolici non
+/// vengono mai seguiti; gli errori sui singoli elementi finiscono nel resoconto.
+async fn delete_paths<F: RemoteFs>(fs: &F, paths: &[String]) -> fs_ops::OpReport {
     let cancel = AtomicBool::new(false);
     let mut total = fs_ops::OpReport::default();
-    for p in &paths {
-        match fs_ops::remove_recursive(&*fs, p, &cancel).await {
+    for p in paths {
+        match fs_ops::remove_recursive(fs, p, &cancel).await {
             Ok(r) => {
                 total.done += r.done;
                 total.failed.extend(r.failed);
@@ -1000,6 +995,18 @@ async fn sftp_delete(
             }),
         }
     }
+    total
+}
+
+/// Elimina file e cartelle (con tutto il contenuto). I link simbolici non vengono mai seguiti.
+#[tauri::command]
+async fn sftp_delete(
+    state: Shared<'_>,
+    id: u64,
+    paths: Vec<String>,
+) -> Result<fs_ops::OpReport, String> {
+    let fs = sftp_for(&state, id).await?;
+    let total = delete_paths(&*fs, &paths).await;
     audit_conn(
         &state,
         id,
@@ -1474,6 +1481,100 @@ fn external_edit_close_conn(state: &AppState, conn: u64) {
         let _ = std::fs::remove_dir_all(&edit.dir);
         let _ = edit.on_event.send(ExternalEvent::Closed { edit_id });
     }
+}
+
+// ---- Pannello locale del doppio pannello ----
+//
+// Stesse operazioni dei comandi `sftp_*`, ma sul disco del computer (backend `LocalFs`). Non hanno un
+// id di connessione e non finiscono nel log di audit, che riguarda i server.
+
+/// Cartella di partenza del pannello locale (Documenti, altrimenti la home).
+#[tauri::command]
+async fn local_home() -> Result<String, String> {
+    pxt_fs::LocalFs.canonicalize(".").await.map_err(err)
+}
+
+/// Contenuto di una cartella locale; il percorso vuoto è l'elenco dei dischi (solo Windows).
+#[tauri::command]
+async fn local_list(path: String) -> Result<Vec<Entry>, String> {
+    pxt_fs::LocalFs.list(&path).await.map_err(err)
+}
+
+#[tauri::command]
+async fn local_delete(paths: Vec<String>) -> Result<fs_ops::OpReport, String> {
+    Ok(delete_paths(&pxt_fs::LocalFs, &paths).await)
+}
+
+#[tauri::command]
+async fn local_tree_info(path: String) -> Result<fs_ops::TreeInfo, String> {
+    fs_ops::tree_info(&pxt_fs::LocalFs, &path, &AtomicBool::new(false))
+        .await
+        .map_err(err)
+}
+
+#[tauri::command]
+async fn local_chmod(path: String, mode: u32, recursive: bool) -> Result<fs_ops::OpReport, String> {
+    if mode > 0o7777 {
+        return Err("permessi non validi".into());
+    }
+    fs_ops::chmod(
+        &pxt_fs::LocalFs,
+        &path,
+        mode,
+        recursive,
+        &AtomicBool::new(false),
+    )
+    .await
+    .map_err(err)
+}
+
+/// Rinomina una voce locale restando nella stessa cartella. Non sovrascrive.
+#[tauri::command]
+async fn local_rename(path: String, new_name: String) -> Result<String, String> {
+    let name = valid_name(&new_name)?;
+    let from = std::path::Path::new(&path);
+    let parent = from.parent().ok_or("percorso non valido")?;
+    let target = parent.join(name).to_string_lossy().into_owned();
+    if target == path {
+        return Ok(target);
+    }
+    if pxt_fs::LocalFs.lstat(&target).await.is_ok() {
+        return Err(format!("esiste già una voce chiamata \"{name}\""));
+    }
+    pxt_fs::LocalFs.rename(&path, &target).await.map_err(err)?;
+    Ok(target)
+}
+
+#[tauri::command]
+async fn local_mkdir(parent: String, name: String) -> Result<String, String> {
+    let name = valid_name(&name)?;
+    let target = std::path::Path::new(&parent)
+        .join(name)
+        .to_string_lossy()
+        .into_owned();
+    if pxt_fs::LocalFs.lstat(&target).await.is_ok() {
+        return Err(format!("esiste già una voce chiamata \"{name}\""));
+    }
+    pxt_fs::LocalFs.mkdir(&target).await.map_err(err)?;
+    Ok(target)
+}
+
+/// Apre un file locale con il programma associato dal sistema. Gli script e i programmi non si aprono
+/// così: il sistema li eseguirebbe.
+#[tauri::command]
+async fn local_open(path: String) -> Result<(), String> {
+    let name = path.rsplit(['/', '\\']).next().unwrap_or(&path);
+    if is_runnable(name) {
+        return Err(
+            "Questo tipo di file potrebbe essere eseguito invece di aprirsi in un editor: aprilo a mano."
+                .into(),
+        );
+    }
+    let entry = pxt_fs::LocalFs.stat(&path).await.map_err(err)?;
+    if entry.kind != pxt_fs::EntryKind::File {
+        return Err("non è un file".into());
+    }
+    open_with_system(std::path::Path::new(&path))
 }
 
 /// Piano di trasferimento in attesa, legato alla connessione per cui è stato calcolato.
@@ -1956,6 +2057,14 @@ pub fn run() {
             sftp_rename,
             sftp_mkdir,
             sftp_read_text,
+            local_home,
+            local_list,
+            local_delete,
+            local_tree_info,
+            local_chmod,
+            local_rename,
+            local_mkdir,
+            local_open,
             external_edit_open,
             external_edit_push,
             external_edit_stop,

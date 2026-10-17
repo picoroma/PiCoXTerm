@@ -124,7 +124,7 @@ Attività dell'elenco non realizzate: **preferiti** (punto 4), **backend locale*
 **Obiettivo:** tutti i file browser, con lo stesso componente a doppio pannello.
 
 Attività:
-1. Modalità **doppio pannello** (locale ↔ remoto) del file browser. *Backend locale fatto; pannelli da fare.*
+1. Modalità **doppio pannello** (locale ↔ remoto) del file browser. **Fatto** nella scheda SFTP (trasferimenti con pulsante, menu e trascinamento); resta da usarlo anche per FTP/FTPS e S3.
 2. Sessione **SFTP** standalone (riusa `pxt-ssh` + backend SFTP). **Fatto** (connessione senza shell, scheda con il pannello).
 3. Backend **FTP/FTPS** con suppaftp: TLS esplicito/implicito, passivo, MLSD/LIST, pin dei certificati, avviso per FTP in chiaro.
 4. Backend **S3**: profili AWS (incluso SSO), access key nel keyring, elenco bucket, endpoint personalizzato (MinIO), multipart, classe di storage.

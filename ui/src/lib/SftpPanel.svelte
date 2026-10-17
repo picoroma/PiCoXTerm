@@ -27,6 +27,12 @@
     standalone = false,
     startPath = null,
     showHiddenInitial = false,
+    kind = 'remote',
+    localDir,
+    onsend,
+    onlocalchanged,
+    ondragdrop,
+    path = $bindable(''),
     sessionName = '',
     sessionColor = null,
   }: {
@@ -53,6 +59,18 @@
     /** Cartella da aprire alla connessione (solo `standalone`; vuoto = home). */
     startPath?: string | null
     showHiddenInitial?: boolean
+    /** `local`: il pannello mostra il disco del computer (doppio pannello); `connId` vale 0. */
+    kind?: 'remote' | 'local'
+    /** Doppio pannello, pannello remoto: cartella del pannello locale, dove si scarica. */
+    localDir?: string
+    /** Doppio pannello, pannello locale: invia al server gli elementi indicati. */
+    onsend?: (paths: string[]) => void
+    /** Il pannello remoto ha scritto nel disco locale (download concluso): aggiornare il pannello locale. */
+    onlocalchanged?: () => void
+    /** Un trascinamento è finito a queste coordinate della finestra: sta al doppio pannello decidere. */
+    ondragdrop?: (paths: string[], x: number, y: number) => void
+    /** Cartella mostrata. */
+    path?: string
     /** Nome e colore della sessione SSH della scheda attiva, per capire a quale server appartengono i file. */
     sessionName?: string
     sessionColor?: string | null
@@ -97,6 +115,30 @@
   let pathInput = $state('')
 
   const cur = $derived(connId !== null ? states[connId] : undefined)
+  const isLocal = $derived(kind === 'local')
+  /** Doppio pannello: il pannello remoto scarica nel pannello locale, senza chiedere la cartella. */
+  const dual = $derived(localDir !== undefined)
+
+  /** Chiama il comando del backend giusto: `sftp_*` (con la connessione) o `local_*` (senza). */
+  function rpc<T>(name: string, args: Record<string, unknown> = {}, id: number | null = connId): Promise<T> {
+    return kind === 'local' ? invoke<T>(`local_${name}`, args) : invoke<T>(`sftp_${name}`, { id, ...args })
+  }
+
+  const LAST_LOCAL = 'pxt.localPath'
+  function rememberLocal(p: string) {
+    try {
+      localStorage.setItem(LAST_LOCAL, p)
+    } catch {
+      /* è solo una comodità */
+    }
+  }
+  function lastLocal(): string | null {
+    try {
+      return localStorage.getItem(LAST_LOCAL)
+    } catch {
+      return null
+    }
+  }
 
   /** Elementi selezionati, per tipo: i file e le cartelle si scaricano con due comandi distinti. */
   const selectedEntries = $derived(cur ? cur.entries.filter((e) => selection.has(e.path)) : [])
@@ -136,10 +178,11 @@
     st.loading = true
     st.error = ''
     try {
-      const entries = await invoke<SftpEntry[]>('sftp_list', { id, path })
+      const entries = await rpc<SftpEntry[]>('list', { path }, id)
       if (seq !== st.seq) return // una navigazione più recente ha preso il posto di questa
       st.entries = entries
       st.path = path
+      if (kind === 'local') rememberLocal(path)
       selection = new Set()
       anchor = null
       if (push) {
@@ -159,8 +202,13 @@
     try {
       // Se il terminale ha già comunicato la directory corrente si parte da lì, altrimenti dalla home.
       // (`cwd` si legge dopo l'attesa: nel frattempo il terminale può aver cambiato directory.)
-      const home = await invoke<string>('sftp_home', { id })
-      if (standalone) {
+      const home = await rpc<string>('home', {}, id)
+      if (kind === 'local') {
+        // Si riparte dall'ultima cartella usata, se esiste ancora.
+        const saved = lastLocal()
+        await go(id, saved || home)
+        if (saved && states[id]?.error) await go(id, home)
+      } else if (standalone) {
         await go(id, startPath || home)
         // Cartella iniziale inesistente o non leggibile: si riparte dalla home.
         if (startPath && states[id]?.error) await go(id, home)
@@ -210,16 +258,29 @@
   // Il campo del percorso rispecchia la cartella mostrata.
   $effect(() => {
     pathInput = cur?.path ?? ''
+    path = cur?.path ?? ''
   })
 
   function parentOf(path: string): string {
+    if (kind === 'local') {
+      const t0 = path.replace(/[\\/]+$/, '')
+      // Radice di un disco (solo Windows): sopra c'è l'elenco dei dischi, cioè il percorso vuoto.
+      if (/^[A-Za-z]:$/.test(t0)) return ''
+      const at = Math.max(t0.lastIndexOf('\\'), t0.lastIndexOf('/'))
+      if (at < 0) return ''
+      const up = t0.slice(0, at)
+      return /^[A-Za-z]:$/.test(up) ? `${up}\\` : up || '/'
+    }
     const trimmed = path.replace(/\/+$/, '')
     const cut = trimmed.lastIndexOf('/')
     return cut <= 0 ? '/' : trimmed.slice(0, cut)
   }
 
+  /** In cima: non c'è un livello superiore (radice del server, o elenco dei dischi). */
+  const atTop = (p: string) => p === '/' || (kind === 'local' && p === '')
+
   function goUp() {
-    if (connId !== null && cur && cur.path !== '/') void go(connId, parentOf(cur.path))
+    if (connId !== null && cur && !atTop(cur.path)) void go(connId, parentOf(cur.path))
   }
 
   function goHistory(delta: number) {
@@ -239,6 +300,13 @@
   function open(e: SftpEntry) {
     if (connId === null) return
     if (e.kind === 'dir') void go(connId, e.path)
+    else if (kind === 'local') {
+      // File locale: lo apre il programma associato dal sistema (non gli script, che verrebbero eseguiti).
+      if (e.kind === 'file') {
+        actionError = ''
+        invoke('local_open', { path: e.path }).catch((err) => (actionError = String(err)))
+      }
+    }
     // Doppio clic su un file: si apre nell'editor integrato (se non supera il limite).
     else if (e.kind === 'file' && onedit && e.size <= MAX_EDIT_BYTES) onedit(connId, e)
   }
@@ -393,6 +461,42 @@
     }
   }
 
+  /** Invia al server (cartella mostrata nel pannello remoto) gli elementi selezionati del pannello locale. */
+  function sendSelection() {
+    if (selectedEntries.length > 0) onsend?.(selectedEntries.map((e) => e.path))
+  }
+
+  /** Doppio pannello: scarica nel pannello locale le voci indicate (di norma la selezione). */
+  export async function downloadPaths(paths: string[], dir: string) {
+    if (connId === null || !cur || paths.length === 0) return
+    const id = connId
+    actionError = ''
+    try {
+      const plan = await invoke<PlanSummary>('transfer_plan_download', { id, remotePaths: paths, localDir: dir })
+      const title = t('downloadTitle', { n: plan.fileCount, size: fmtBytes(plan.totalBytes), dir })
+      confirmAndStart(plan, title, () => onlocalchanged?.())
+    } catch (e) {
+      actionError = String(e)
+    }
+  }
+
+  function downloadToLocal() {
+    if (localDir === undefined) return
+    // Nel pannello locale è aperto l'elenco dei dischi: non c'è una cartella in cui scaricare.
+    if (!localDir) actionError = t('chooseLocalFolder')
+    else void downloadPaths(selectedEntries.map((e) => e.path), localDir)
+  }
+
+  /** Carica nella cartella remota mostrata file e cartelle locali (usato dal doppio pannello). */
+  export function uploadPaths(paths: string[]) {
+    void upload(paths)
+  }
+
+  /** Rilegge la cartella mostrata. */
+  export function refresh() {
+    refreshCurrent()
+  }
+
   /** Scarica in una cartella locale scelta dall'utente i file o le cartelle selezionati. */
   async function downloadSelection(kind: 'file' | 'dir') {
     if (connId === null || !cur) return
@@ -426,8 +530,7 @@
     const d = dialog
     d.busy = true
     try {
-      const r = await invoke<{ done: number; failed: { path: string; message: string }[] }>('sftp_delete', {
-        id: connId,
+      const r = await rpc<{ done: number; failed: { path: string; message: string }[] }>('delete', {
         paths: d.entries.map((e) => e.path),
       })
       refreshCurrent()
@@ -451,7 +554,7 @@
     if (dialog?.type !== 'rename' || connId === null) return
     const d = dialog
     try {
-      await invoke('sftp_rename', { id: connId, path: d.entry.path, newName: name })
+      await rpc('rename', { path: d.entry.path, newName: name })
       dialog = null
       refreshCurrent()
     } catch (e) {
@@ -467,7 +570,7 @@
     if (dialog?.type !== 'mkdir' || connId === null || !cur) return
     const d = dialog
     try {
-      await invoke('sftp_mkdir', { id: connId, parent: cur.path, name })
+      await rpc('mkdir', { parent: cur.path, name })
       dialog = null
       refreshCurrent()
     } catch (e) {
@@ -529,6 +632,8 @@
   onMount(() => {
     let unlisten: (() => void) | undefined
     let disposed = false
+    // Il pannello locale non riceve file da Esplora risorse: sono già nel disco locale.
+    if (kind === 'local') return
     getCurrentWebview()
       .onDragDropEvent((event) => {
         const p = event.payload
@@ -554,6 +659,37 @@
       unlisten?.()
     }
   })
+
+  // ---- Trascinamento fra i pannelli (eventi del puntatore: il drag&drop HTML5 non funziona in Tauri) ----
+
+  let drag = $state<{ paths: string[]; x: number; y: number; active: boolean } | null>(null)
+  let justDragged = false
+
+  function rowPointerDown(ev: PointerEvent, e: SftpEntry) {
+    if (!ondragdrop || ev.button !== 0) return
+    // Trascinando una voce non selezionata si trascina solo quella.
+    const paths = selection.has(e.path) ? [...selection] : [e.path]
+    const startX = ev.clientX
+    const startY = ev.clientY
+    let started = false
+    const move = (m: PointerEvent) => {
+      if (!started && Math.hypot(m.clientX - startX, m.clientY - startY) < 6) return
+      started = true
+      drag = { paths, x: m.clientX, y: m.clientY, active: true }
+    }
+    const up = (u: PointerEvent) => {
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', up)
+      drag = null
+      if (started) {
+        justDragged = true
+        setTimeout(() => (justDragged = false), 0)
+        ondragdrop?.(paths, u.clientX, u.clientY)
+      }
+    }
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', up)
+  }
 
   function onkey(e: KeyboardEvent, entry: SftpEntry) {
     if (e.key === 'Delete' || e.key === 'F2' || (e.key === 'Enter' && e.altKey)) {
@@ -591,11 +727,12 @@
   class:colored={!!sessionColor}
   style:--sc={sessionColor ?? undefined}
   bind:this={panelEl}
-  aria-label={t('sftp')}
+  data-pane={ondragdrop ? kind : undefined}
+  aria-label={isLocal ? t('localPanel') : t('sftp')}
 >
   {#if sessionName}
     <div class="caption" title={sessionName}>
-      <span class="label">{t('sftp')}</span>
+      <span class="label">{isLocal ? t('localPanel') : t('sftp')}</span>
       <span class="nm">{sessionName}</span>
     </div>
   {/if}
@@ -603,24 +740,34 @@
     <span class="group" role="group" aria-label={t('navigation')}>
       <button type="button" title={t('back')} aria-label={t('back')} disabled={!cur || cur.index <= 0} onclick={() => goHistory(-1)}><Icon name="arrow-left" /></button>
       <button type="button" title={t('forward')} aria-label={t('forward')} disabled={!cur || cur.index >= cur.history.length - 1} onclick={() => goHistory(1)}><Icon name="arrow-right" /></button>
-      <button type="button" title={t('parentFolder')} aria-label={t('parentFolder')} disabled={!cur || cur.path === '/'} onclick={goUp}><Icon name="parent" /></button>
+      <button type="button" title={t('parentFolder')} aria-label={t('parentFolder')} disabled={!cur || atTop(cur.path)} onclick={goUp}><Icon name="parent" /></button>
       <button type="button" title={t('refresh')} aria-label={t('refresh')} disabled={!cur || connId === null} onclick={() => connId !== null && cur && go(connId, cur.path, false)}><Icon name="refresh" /></button>
     </span>
+    {#if isLocal}
+      <span class="group" role="group" aria-label={t('transfers')}>
+        <button type="button" title={t('sendToServer')} aria-label={t('sendToServer')} disabled={!onsend || selectedEntries.length === 0} onclick={sendSelection}><Icon name="upload" /></button>
+      </span>
+    {:else if dual}
+      <span class="group" role="group" aria-label={t('transfers')}>
+        <button type="button" title={t('downloadToLocal')} aria-label={t('downloadToLocal')} disabled={!cur || selectedEntries.length === 0} onclick={downloadToLocal}><Icon name="download" /></button>
+      </span>
+    {:else}
     <span class="group" role="group" aria-label={t('transfers')}>
       <button type="button" title={t('uploadFiles')} aria-label={t('uploadFiles')} disabled={!cur} onclick={() => pickUpload(false)}><Icon name="upload" /></button>
       <button type="button" title={t('uploadFolder')} aria-label={t('uploadFolder')} disabled={!cur} onclick={() => pickUpload(true)}><Icon name="folder-up" /></button>
       <button type="button" title={t('downloadFiles')} aria-label={t('downloadFiles')} disabled={!cur || !hasFiles} onclick={() => downloadSelection('file')}><Icon name="download" /></button>
       <button type="button" title={t('downloadFolders')} aria-label={t('downloadFolders')} disabled={!cur || !hasDirs} onclick={() => downloadSelection('dir')}><Icon name="folder-down" /></button>
     </span>
+    {/if}
     <span class="spacer"></span>
-    {#if !standalone}
+    {#if !standalone && !isLocal}
     <span class="group" role="group" aria-label={t('terminal')}>
       <button type="button" title={t('cdHere')} aria-label={t('cdHere')} disabled={!cur} onclick={() => cur && void cdTerminal(cur.path)}><Icon name="terminal" /></button>
       <button type="button" title={t('reinjectTracking')} aria-label={t('reinjectTracking')} disabled={!cur} onclick={onenabletracking}><Icon name="target" /></button>
     </span>
     {/if}
     <span class="group" role="group" aria-label={t('viewOptions')}>
-      {#if !standalone}
+      {#if !standalone && !isLocal}
       <button
         type="button"
         class:on={follow}
@@ -640,7 +787,7 @@
   {#if connId === null || !cur}
     <p class="empty">{t('sftpHint')}</p>
   {:else}
-    {#if !standalone && follow && tracking.state !== 'active'}
+    {#if !standalone && !isLocal && follow && tracking.state !== 'active'}
       <div class="notice" role="status">
         {#if tracking.state === 'pending'}
           {t('trackingPending')}
@@ -656,7 +803,7 @@
       </div>
     {/if}
     <form class="pathbar" onsubmit={submitPath}>
-      <input bind:value={pathInput} aria-label={t('path')} spellcheck="false" onkeydown={(e) => e.key === 'Escape' && (pathInput = cur.path)} />
+      <input bind:value={pathInput} aria-label={t('path')} placeholder={isLocal ? t('thisComputer') : ''} spellcheck="false" onkeydown={(e) => e.key === 'Escape' && (pathInput = cur.path)} />
     </form>
     <input class="filter" type="search" bind:value={filter} placeholder={t('filterFiles')} aria-label={t('filterFiles')} />
 
@@ -686,7 +833,8 @@
           aria-selected={selection.has(e.path)}
           tabindex="0"
           title={menu ? undefined : rowTooltip(e)}
-          onclick={(ev) => selectRow(e, ev)}
+          onpointerdown={(ev) => rowPointerDown(ev, e)}
+          onclick={(ev) => !justDragged && selectRow(e, ev)}
           oncontextmenu={(ev) => rowMenu(ev, e)}
           ondblclick={() => open(e)}
           onkeydown={(ev) => onkey(ev, e)}
@@ -708,33 +856,45 @@
   {/if}
 </section>
 
+{#if drag?.active}
+  <div class="drag-ghost" style:left="{drag.x + 12}px" style:top="{drag.y + 8}px">{t('dragCount', { n: drag.paths.length })}</div>
+{/if}
+
 {#if pending}
   <ConflictDialog plan={pending.plan} onstart={startPending} oncancel={cancelPending} />
 {/if}
 
 {#if menu}
   <div class="menu" role="menu" use:placeMenu={{ x: menu.x, y: menu.y }}>
-    {#if hasFiles}
-      <button role="menuitem" onclick={() => pick(() => downloadSelection('file'))}>{t('downloadFiles')}</button>
-    {/if}
-    {#if hasDirs}
-      <button role="menuitem" onclick={() => pick(() => downloadSelection('dir'))}>{t('downloadFolders')}</button>
+    {#if isLocal}
+      <button role="menuitem" disabled={!onsend || selectedEntries.length === 0} onclick={() => pick(sendSelection)}>{t('sendToServer')}</button>
+    {:else if dual}
+      <button role="menuitem" disabled={selectedEntries.length === 0} onclick={() => pick(downloadToLocal)}>{t('downloadToLocal')}</button>
+    {:else}
+      {#if hasFiles}
+        <button role="menuitem" onclick={() => pick(() => downloadSelection('file'))}>{t('downloadFiles')}</button>
+      {/if}
+      {#if hasDirs}
+        <button role="menuitem" onclick={() => pick(() => downloadSelection('dir'))}>{t('downloadFolders')}</button>
+      {/if}
     {/if}
     {#if menu.entry}
-      {#if !standalone && single?.kind === 'dir'}
+      {#if !standalone && !isLocal && single?.kind === 'dir'}
         <button role="menuitem" onclick={() => pick(() => single && void cdTerminal(single.path))}>{t('cdFolder')}</button>
       {/if}
-      {#if onedit}
+      {#if onedit && !isLocal}
         <button role="menuitem" disabled={!single || single.kind !== 'file' || single.size > MAX_EDIT_BYTES} title={single && single.size > MAX_EDIT_BYTES ? t('editTooLarge') : undefined} onclick={() => pick(editSelected)}>{t('edit')}</button>
       {/if}
-      {#if onexternal}
+      {#if onexternal && !isLocal}
         <button role="menuitem" disabled={!single || single.kind !== 'file' || single.size > MAX_EXTERNAL_BYTES} title={single && single.size > MAX_EXTERNAL_BYTES ? t('externalTooLarge') : undefined} onclick={() => pick(externalSelected)}>{t('openExternal')}</button>
       {/if}
       <hr />
     {/if}
-    <button role="menuitem" onclick={() => pick(() => pickUpload(false))}>{t('uploadFiles')}</button>
-    <button role="menuitem" onclick={() => pick(() => pickUpload(true))}>{t('uploadFolder')}</button>
-    <hr />
+    {#if !isLocal}
+      <button role="menuitem" onclick={() => pick(() => pickUpload(false))}>{t('uploadFiles')}</button>
+      <button role="menuitem" onclick={() => pick(() => pickUpload(true))}>{t('uploadFolder')}</button>
+      <hr />
+    {/if}
     <button role="menuitem" onclick={() => pick(askMkdir)}>{t('newFolder')}</button>
     {#if menu.entry}
       <button role="menuitem" disabled={!single} onclick={() => pick(askRename)}>{t('rename')} <kbd>F2</kbd></button>
@@ -744,7 +904,7 @@
       <button role="menuitem" disabled={!single} onclick={() => pick(askProps)}>{t('properties')} <kbd>Alt+⏎</kbd></button>
     {/if}
     <hr />
-    {#if !standalone}
+    {#if !standalone && !isLocal}
       <button role="menuitem" onclick={() => pick(() => cur && void cdTerminal(cur.path))}>{t('cdHere')}</button>
     {/if}
     <button role="menuitem" onclick={() => pick(refreshCurrent)}>{t('refresh')}</button>
@@ -779,10 +939,21 @@
     oncancel={() => (dialog = null)}
   />
 {:else if dialog?.type === 'props' && connId !== null}
-  <PropertiesDialog entry={dialog.entry} {connId} onclose={() => (dialog = null)} onchanged={refreshCurrent} />
+  <PropertiesDialog entry={dialog.entry} {connId} {kind} onclose={() => (dialog = null)} onchanged={refreshCurrent} />
 {/if}
 
 <style>
+  .drag-ghost {
+    position: fixed;
+    z-index: 60;
+    pointer-events: none;
+    padding: 3px 10px;
+    border-radius: 12px;
+    background: var(--accent);
+    color: #fff;
+    font-size: 12px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+  }
   .sftp {
     display: flex;
     flex-direction: column;

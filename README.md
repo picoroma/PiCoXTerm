@@ -14,7 +14,7 @@ Current release: **0.1.0-beta.1** (Windows only, unsigned). See the [changelog](
 - **Host keys**: confirmation with fingerprint (accept once, accept and save, cancel); if a key changes the connection is blocked until the saved entry is removed
 - "Test connection" without opening a shell, reconnect in the same tab, Quick connect (`user@host:port`)
 
-**SFTP sessions**: connect over SSH without a shell and browse the server in a tab (same panel, editor and transfers as below).
+**SFTP sessions**: connect over SSH without a shell and browse the server in a tab, with a **dual-pane** view (your computer on the left, the server on the right; send files with a button or by dragging) plus the same editor and transfers as below.
 
 **SFTP panel** (same SSH connection, no second login)
 - Follows the terminal's current directory (OSC 7, with automatic injection for bash, zsh and tcsh) and takes the terminal to a folder ("go to this folder in the terminal")

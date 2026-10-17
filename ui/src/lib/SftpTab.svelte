@@ -2,9 +2,9 @@
   import { onMount } from 'svelte'
   import { Channel, invoke } from '@tauri-apps/api/core'
   import ConnectPrompts, { type HostKeyChange, type HostKeyRequest } from './ConnectPrompts.svelte'
-  import SftpPanel from './SftpPanel.svelte'
+  import DualPane from './DualPane.svelte'
   import { t } from '../i18n'
-  import type { SftpEntry, Target, TrackingInfo } from './types'
+  import type { SftpEntry, Target } from './types'
 
   type TermEvent =
     | ({ type: 'hostKey' } & HostKeyRequest)
@@ -43,8 +43,6 @@
   const PASSWORD_REQUIRED = 'password-required'
   const PASSPHRASE_REQUIRED = 'passphrase-required'
   const HOSTKEY_CHANGED = 'hostkey-changed'
-  // Una sessione SFTP non ha terminale: niente tracciamento della directory.
-  const noTracking: TrackingInfo = { state: 'off', shell: null, message: null }
 
   let error = $state('')
   let hostKeyPrompt = $state<HostKeyRequest | null>(null)
@@ -134,15 +132,10 @@
 
   <div class="panel">
     {#if connId !== null}
-      <SftpPanel
-        standalone
+      <DualPane
         {connId}
-        cwd=""
-        liveIds={[connId]}
-        tracking={noTracking}
-        onenabletracking={() => {}}
         {startPath}
-        showHiddenInitial={showHidden}
+        {showHidden}
         {sessionName}
         {sessionColor}
         {onedit}

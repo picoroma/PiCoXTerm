@@ -20,11 +20,14 @@
   let {
     entry,
     connId,
+    kind = 'remote',
     onclose,
     onchanged,
   }: {
     entry: SftpEntry
     connId: number
+    /** `local`: l'elemento sta sul disco del computer (comandi `local_*`, senza connessione). */
+    kind?: 'remote' | 'local'
     onclose: () => void
     /** Chiamata dopo una modifica dei permessi, per aggiornare l'elenco. */
     onchanged: () => void
@@ -50,7 +53,7 @@
     applied = mode
     octalText = mode.toString(8).padStart(4, '0')
     if (isDir) {
-      invoke<TreeInfo>('sftp_tree_info', { id: connId, path: entry.path })
+      invoke<TreeInfo>(kind === 'local' ? 'local_tree_info' : 'sftp_tree_info', kind === 'local' ? { path: entry.path } : { id: connId, path: entry.path })
         .then((r) => (tree = r))
         .catch((e) => (treeError = String(e)))
     }
@@ -122,9 +125,11 @@
       // I bit speciali (setuid, setgid, sticky) valgono solo per l'elemento scelto: darli a tutto il
       // contenuto, come farebbe `chmod -R 4755`, sarebbe pericoloso.
       const special = mode & 0o7000
-      const r = await invoke<OpReport>('sftp_chmod', { id: connId, path: entry.path, mode: deep ? mode & 0o777 : mode, recursive: deep })
+      const chmod = (args: Record<string, unknown>) =>
+        invoke<OpReport>(kind === 'local' ? 'local_chmod' : 'sftp_chmod', kind === 'local' ? args : { id: connId, ...args })
+      const r = await chmod({ path: entry.path, mode: deep ? mode & 0o777 : mode, recursive: deep })
       if (deep && special !== 0) {
-        const top = await invoke<OpReport>('sftp_chmod', { id: connId, path: entry.path, mode, recursive: false })
+        const top = await chmod({ path: entry.path, mode, recursive: false })
         r.failed.push(...top.failed)
       }
       if (r.failed.length > 0) {

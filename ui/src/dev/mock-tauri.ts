@@ -53,6 +53,15 @@ const eventChannels = new Map<number, string>()
 let connSeq = 6
 ;(window as any).__emitCwd = (path: string, connId?: number) =>
   emit(connId !== undefined ? eventChannels.get(connId)! : (window as any).__lastEvent, { type: 'cwd', path })
+const le = (name: string, dir: string, kind: 'file' | 'dir', size = 0): any => ({ name, path: `${dir.replace(/\\$/, '')}\\${name}`, kind, isSymlink: false, size, modified: 1_700_000_000, mode: null, owner: null, group: null, uid: null, gid: null })
+const fakeLocal: Record<string, any[]> = {
+  '': [le('C:', '', 'dir'), le('D:', '', 'dir')].map((e) => ({ ...e, path: `${e.name}\\` })),
+  'C:\\': [le('Users', 'C:\\', 'dir'), le('Windows', 'C:\\', 'dir')],
+  'C:\\Users': [le('mock', 'C:\\Users', 'dir')],
+  'C:\\Users\\mock': [le('Documents', 'C:\\Users\\mock', 'dir')],
+  'C:\\Users\\mock\\Documents': [le('relazione.docx', 'C:\\Users\\mock\\Documents', 'file', 48_000), le('foto', 'C:\\Users\\mock\\Documents', 'dir'), le('dati.csv', 'C:\\Users\\mock\\Documents', 'file', 1200), le('script.sh', 'C:\\Users\\mock\\Documents', 'file', 90)],
+  'C:\\Users\\mock\\Documents\\foto': [le('mare.jpg', 'C:\\Users\\mock\\Documents\\foto', 'file', 2_000_000)],
+}
 let externalSeq = 700
 const externalChannels = new Map<number, string>()
 ;(window as any).__externalChanged = (editId: number) => emit(externalChannels.get(editId)!, { type: 'changed', editId })
@@ -203,6 +212,22 @@ const handlers: Record<string, (args: any) => unknown> = {
     ;(window as any).__lastSaved = { path, content }
     return { status: 'saved', size: c.size, modified: c.modified }
   },
+  // Disco locale finto (pannello locale del doppio pannello).
+  local_home: () => 'C:\\Users\\mock\\Documents',
+  local_list: ({ path }) => {
+    if (!(path in fakeLocal)) throw `percorso non trovato: ${path}`
+    return fakeLocal[path]
+  },
+  local_open: ({ path }) => {
+    ;(window as any).__lastLocalOpen = path
+  },
+  local_delete: ({ paths }) => {
+    ;(window as any).__lastLocalDelete = paths
+    return { done: paths.length, failed: [] }
+  },
+  local_tree_info: () => ({ files: 1, dirs: 1, bytes: 10, partial: false }),
+  local_mkdir: ({ parent, name }) => `${parent}\\${name}`,
+  local_rename: ({ path, newName }) => path.replace(/[^\\]+$/, newName),
   sftp_list: ({ path }) => {
     if (!(path in fakeFs)) throw `percorso non trovato: ${path}`
     return fakeFs[path]
