@@ -5,6 +5,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
 
 ## [Unreleased]
 
+## [0.1.0-beta.2] - 2026-10-19
+
+Second test release. Windows only, unsigned (SmartScreen will warn). Now free software under the GPL-3.0.
+
 ### Added
 - **RDP sessions** (system client): double-click a saved RDP session to open Windows' own Remote Desktop client (`mstsc`; Windows App on macOS, FreeRDP on Linux). Options: domain, full screen, all monitors, resolution, gateway, clipboard and drive sharing (drives off by default). The saved password never touches a file or a command line: on Windows it is handed over through a temporary Credential Manager entry that is removed shortly after the launch. Not tested against a real RDP server yet.
 - **Licence**: PiCoXterm is now released under the GNU General Public License v3.0 (`GPL-3.0-only`); the full text is in `LICENSE` and the About dialog shows it.
@@ -25,6 +29,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
 
 ### Changed
 - Partial files are named `<name>.<size>-<mtime>.pxt-part` so a partial of a different version of the file is never reused.
+
+### Known limits
+- Directory tracking works with bash, zsh and tcsh only (not ksh, csh, ash).
+- S3 uploads cannot be resumed (an interrupted upload starts again from the beginning); downloads can.
+- S3 with an AWS SSO profile and RDP against a real server have not been tested yet.
+- Tested on Windows only; portable mode not verified end to end. Not signed.
+- The SFTP panel does not follow `su`/`sudo` to another user (by design).
 
 ## [0.1.0-beta.1] - 2026-10-16
 

@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/pxt-core", "crates/pxt-ssh", "crates/pxt-fs", "crates/pxt-rdp", "src-tauri"]
 
 [workspace.package]
-version = "0.1.0-beta.1"
+version = "0.1.0-beta.2"
 edition = "2021"
 license = "GPL-3.0-only"
 authors = ["PiCo"]
