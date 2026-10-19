@@ -137,6 +137,15 @@ Attività:
 - Con `allowPlainFtp: false`, una sessione FTP in chiaro non parte.
 - Accesso a un bucket S3 reale tramite profilo SSO.
 
+**Verifica M3 (2026-10-19):**
+
+| Criterio | Esito | Come |
+|---|---|---|
+| Stessi test di trasferimento su SFTP, FTPS e S3 | **Superato** | 39 test e2e contro `testenv/` (SFTP 4+11+6+4, FTP/FTPS 8, S3 9). Su S3: andata e ritorno multipart da 21 MiB, ripresa del download, 300 file in parallelo, politiche sui conflitti (salta, rinomina, sovrascrivi), annullamento senza oggetti residui. Il motore di MinIO è RustFS (MinIO non ha più immagini pubbliche, D-28). Differenza accettata: l'upload S3 non è ripristinabile (riparte da zero) |
+| Certificato FTPS autofirmato: pin al primo accesso, nessuna richiesta al secondo | **Superato** | `ftp_e2e`: `ftps_needs_a_pin…` e `implicit_ftps_needs_a_pin…`; finestra di conferma provata nel browser |
+| `allowPlainFtp: false` blocca l'FTP in chiaro | **Superato** | Test unitari della policy; controllo in `ftp_connect`; opzione nascosta nel modulo (provato nel browser) |
+| Bucket S3 reale con profilo SSO | **Da provare** | Serve un account AWS reale con SSO: il codice lo supporta (`aws-config` con feature `sso`) ma non è mai stato eseguito. Il profilo con chiavi di accesso su un account reale è stato aperto dall'utente (2026-10-17) |
+
 ---
 
 ## M4: RDP e VNC

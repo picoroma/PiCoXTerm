@@ -383,3 +383,146 @@ async fn external_bucket_lists_only_that_bucket() {
     assert_eq!(root[0].name, env.bucket);
     env.cleanup().await;
 }
+
+async fn run_with(
+    fs: &S3Fs,
+    plan: &transfer::Plan,
+    policy: ConflictPolicy,
+    control: &Control,
+) -> Result<transfer::Summary, transfer::TransferError> {
+    let mut none = |_: &Progress| {};
+    transfer::run(
+        fs,
+        plan,
+        policy,
+        control,
+        &JobState::new(plan),
+        4,
+        &mut none,
+    )
+    .await
+}
+
+async fn read_object(fs: &S3Fs, path: &str) -> String {
+    use tokio::io::AsyncReadExt;
+    let mut r = fs.open_read(path).await.unwrap();
+    let mut out = String::new();
+    r.read_to_string(&mut out).await.unwrap();
+    out
+}
+
+#[tokio::test]
+#[ignore = "richiede il servizio s3 di testenv"]
+async fn conflict_policies_skip_rename_and_overwrite() {
+    let env = setup().await;
+    let fs = &env.fs;
+    let file = env.local.join("a.txt");
+    std::fs::write(&file, "versione 1").unwrap();
+    let plan = plan_upload(fs, std::slice::from_ref(&file), &env.p(""))
+        .await
+        .unwrap();
+    run_with(fs, &plan, ConflictPolicy::Overwrite, &Control::new())
+        .await
+        .unwrap();
+
+    std::fs::write(&file, "versione 2 più lunga").unwrap();
+    let plan = plan_upload(fs, std::slice::from_ref(&file), &env.p(""))
+        .await
+        .unwrap();
+    assert_eq!(plan.conflicts, 1);
+
+    let sum = run_with(fs, &plan, ConflictPolicy::Skip, &Control::new())
+        .await
+        .unwrap();
+    assert_eq!((sum.files_done, sum.files_skipped), (0, 1));
+    assert_eq!(read_object(fs, &env.p("a.txt")).await, "versione 1");
+
+    let sum = run_with(fs, &plan, ConflictPolicy::Rename, &Control::new())
+        .await
+        .unwrap();
+    assert_eq!(sum.files_done, 1);
+    assert_eq!(read_object(fs, &env.p("a.txt")).await, "versione 1");
+    assert_eq!(
+        read_object(fs, &env.p("a (1).txt")).await,
+        "versione 2 più lunga"
+    );
+
+    let sum = run_with(fs, &plan, ConflictPolicy::Overwrite, &Control::new())
+        .await
+        .unwrap();
+    assert_eq!(sum.files_done, 1);
+    assert_eq!(
+        read_object(fs, &env.p("a.txt")).await,
+        "versione 2 più lunga"
+    );
+    env.cleanup().await;
+}
+
+#[tokio::test]
+#[ignore = "richiede il servizio s3 di testenv"]
+async fn many_small_files_in_parallel_arrive_intact() {
+    let env = setup().await;
+    let fs = &env.fs;
+    let tree = env.local.join("tanti");
+    std::fs::create_dir_all(&tree).unwrap();
+    for i in 0..300 {
+        std::fs::write(tree.join(format!("f{i:03}.txt")), format!("contenuto {i}")).unwrap();
+    }
+    let plan = plan_upload(fs, std::slice::from_ref(&tree), &env.p(""))
+        .await
+        .unwrap();
+    let sum = run_with(fs, &plan, ConflictPolicy::Overwrite, &Control::new())
+        .await
+        .unwrap();
+    assert_eq!((sum.files_done, sum.failed.len()), (300, 0));
+    assert_eq!(fs.list(&env.p("tanti")).await.unwrap().len(), 300);
+    assert_eq!(
+        read_object(fs, &env.p("tanti/f123.txt")).await,
+        "contenuto 123"
+    );
+
+    let back = env.local.join("giu");
+    std::fs::create_dir_all(&back).unwrap();
+    let plan = plan_download(fs, &[env.p("tanti")], &back).await.unwrap();
+    let sum = run_with(fs, &plan, ConflictPolicy::Overwrite, &Control::new())
+        .await
+        .unwrap();
+    assert_eq!((sum.files_done, sum.failed.len()), (300, 0));
+    assert_eq!(
+        std::fs::read_to_string(back.join("tanti").join("f299.txt")).unwrap(),
+        "contenuto 299"
+    );
+    env.cleanup().await;
+}
+
+#[tokio::test]
+#[ignore = "richiede il servizio s3 di testenv"]
+async fn cancelling_an_upload_leaves_no_object() {
+    let env = setup().await;
+    let fs = &env.fs;
+    let big = env.local.join("enorme.bin");
+    write_pseudo_random(&big, 150, 99);
+    let plan = plan_upload(fs, &[big], &env.p("")).await.unwrap();
+    let control = std::sync::Arc::new(Control::new());
+    let flag = std::sync::Arc::clone(&control);
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(400)).await;
+        flag.cancel();
+    });
+    let t0 = std::time::Instant::now();
+    let result = run_with(fs, &plan, ConflictPolicy::Overwrite, &control).await;
+    assert!(
+        matches!(result, Err(transfer::TransferError::Cancelled)),
+        "{result:?}"
+    );
+    assert!(
+        t0.elapsed() < Duration::from_secs(10),
+        "annullamento troppo lento"
+    );
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert!(
+        fs.list(&env.p("")).await.unwrap().is_empty(),
+        "nessun oggetto deve restare"
+    );
+    env.cleanup().await;
+}
