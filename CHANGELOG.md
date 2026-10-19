@@ -6,6 +6,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
 ## [Unreleased]
 
 ### Added
+- **RDP sessions** (system client): double-click a saved RDP session to open Windows' own Remote Desktop client (`mstsc`; Windows App on macOS, FreeRDP on Linux). Options: domain, full screen, all monitors, resolution, gateway, clipboard and drive sharing (drives off by default). The saved password never touches a file or a command line: on Windows it is handed over through a temporary Credential Manager entry that is removed shortly after the launch. Not tested against a real RDP server yet.
 - **Licence**: PiCoXterm is now released under the GNU General Public License v3.0 (`GPL-3.0-only`); the full text is in `LICENSE` and the About dialog shows it.
 - **SFTP sessions**: a session type that connects over SSH without a shell (also works with SFTP-only accounts) and opens a file browser tab, with an optional start folder and "show hidden files". Jump hosts, passwords/keys/agent, host key checks and the built-in editor work as in SSH sessions. The "SFTP" entry of the new-session dialog is now enabled.
 - **Dual-pane view** in SFTP tabs: your computer on the left (starts in Documents, remembers the last folder, lists the drives on Windows), the server on the right. Send files and folders with the toolbar button, the context menu or by dragging between the panes, in both directions, using the same queue (parallel, pause/resume). Double-click a local file to open it with its program (scripts and executables are refused). The divider is draggable.

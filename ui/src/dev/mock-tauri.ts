@@ -29,7 +29,9 @@ ftpPlain.ftp = { security: 'plain', pinnedCert: null, startPath: null, showHidde
 const s3Test = { ...newSession(root.id, 's3'), name: 'Backup S3', host: 's3.amazonaws.com', port: 443, username: 'pxtaccess' }
 s3Test.credentialRef = { provider: 'local', id: 's1' }
 s3Test.s3 = { region: 'us-east-1', endpoint: 'http://127.0.0.1:9000', pathStyle: true, bucket: null, profile: null, showHidden: false }
-let nodes: SessionNode[] = [root, pw, key, prod, test, files, filesPw, ftpTls, ftpPlain, s3Test]
+const rdpWin = { ...newSession(root.id, 'rdp'), name: 'Server Windows (RDP)', host: 'win01.example.com', port: 3389, username: 'admin' }
+rdpWin.credentialRef = { provider: 'local', id: 'r1' }
+let nodes: SessionNode[] = [root, pw, key, prod, test, files, filesPw, ftpTls, ftpPlain, s3Test, rdpWin]
 
 let nextCallback = 0
 const callbacks = new Map<number, (m: unknown) => void>()
@@ -175,6 +177,9 @@ const handlers: Record<string, (args: any) => unknown> = {
   ssh_resize: () => {},
   ssh_enable_cwd_tracking: () => ({ type: 'tracking', state: 'active', shell: '/bin/bash', message: null }),
   sftp_home: ({ id }) => (s3Conns.has(id) ? '/' : '/home/u'),
+  rdp_open: ({ sessionId, password }) => {
+    ;(window as any).__lastRdp = { sessionId, password }
+  },
   s3_connect: ({ request }) => {
     ;(window as any).__lastS3Connect = request
     const s: any = nodes.find((n) => n.id === request.sessionId)

@@ -153,7 +153,7 @@ Attività:
 **Obiettivo:** completare il perimetro dei protocolli della v1.
 
 Attività:
-1. `pxt-rdp`: generazione del file `.rdp` e avvio di mstsc / Windows App / FreeRDP; credenziali temporanee `TERMSRV/<host>` su Windows.
+1. `pxt-rdp`: generazione del file `.rdp` e avvio di mstsc / Windows App / FreeRDP; credenziali temporanee `TERMSRV/<host>` su Windows. **Fatto** (D-31): file `.rdp` senza password, voce del Credential Manager di sessione rimossa dopo 30 s, sessione RDP nell'albero e nel modulo di modifica; verificati i test unitari e la scrittura/rimozione della credenziale; **da provare con un server RDP reale** (NLA, riconnessione).
 2. Spike e implementazione dell'**adattatore noVNC** via IPC (nessun WebSocket locale).
 3. Sessione VNC in una scheda: scala, sola visualizzazione, Ctrl+Alt+Canc, clipboard.
 4. Opzione VNC tramite tunnel SSH (`direct-tcpip`).

@@ -44,6 +44,7 @@ exceptions = [
     { allow = ["GPL-3.0-only"], crate = "pxt-core" },
     { allow = ["GPL-3.0-only"], crate = "pxt-ssh" },
     { allow = ["GPL-3.0-only"], crate = "pxt-fs" },
+    { allow = ["GPL-3.0-only"], crate = "pxt-rdp" },
 ]
 
 [bans]

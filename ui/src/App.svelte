@@ -171,7 +171,18 @@
 
   function openSession(s: Session) {
     if (s.protocol === 'sftp' || s.protocol === 'ftp' || s.protocol === 's3') openSftpTab(s)
+    else if (s.protocol === 'rdp') void openRdp(s)
     else openTab(s.name, { sessionId: s.id })
+  }
+
+  /** RDP: si avvia il client del sistema, non c'è una scheda. */
+  async function openRdp(s: Session) {
+    try {
+      await invoke('rdp_open', { sessionId: s.id, password: null })
+      notice = t('rdpStarted', { name: s.name })
+    } catch (e) {
+      notice = String(e)
+    }
   }
 
   function openSftpTab(s: Session) {
@@ -237,11 +248,12 @@
   function pickProtocol(protocol: Protocol) {
     const parentId = picking?.parentId ?? null
     picking = null
-    const kind = protocol === 'sftp' || protocol === 'ftp' || protocol === 's3' ? protocol : 'ssh'
+    const kind = protocol === 'sftp' || protocol === 'ftp' || protocol === 's3' || protocol === 'rdp' ? protocol : 'ssh'
     const s = newSession(parentId, kind)
     // FTP: porta abituale del tipo di protezione predefinito (FTPS esplicito, 21).
     if (kind === 'ftp') s.port = 21
     if (kind === 's3') s.port = 443
+    if (kind === 'rdp') s.port = 3389
     editing = { session: s, isNew: true }
   }
 

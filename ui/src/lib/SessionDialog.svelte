@@ -55,7 +55,16 @@
   const isFtp = initial.protocol === 'ftp'
   const isS3 = initial.protocol === 's3'
   /** Sessione che apre un file browser (SFTP o FTP): niente terminale, tema e font. */
-  const isSftp = initial.protocol === 'sftp' || isFtp || isS3
+  const isRdp = initial.protocol === 'rdp'
+  const isSftp = initial.protocol === 'sftp' || isFtp || isS3 || isRdp
+  let rdpDomain = $state(initial.rdp.domain ?? '')
+  let rdpClient = $state(initial.rdp.client)
+  let rdpFullscreen = $state(initial.rdp.fullscreen)
+  let rdpMultimon = $state(initial.rdp.multimon)
+  let rdpResolution = $state(initial.rdp.resolution ?? '')
+  let rdpClipboard = $state(initial.rdp.redirectClipboard)
+  let rdpDrives = $state(initial.rdp.redirectDrives)
+  let rdpGateway = $state(initial.rdp.gateway ?? '')
   let s3Region = $state(initial.s3.region)
   let s3Endpoint = $state(initial.s3.endpoint ?? '')
   let s3PathStyle = $state(initial.s3.pathStyle)
@@ -80,11 +89,13 @@
     ftpSecurity = next
   }
 
-  const usesSecret = $derived(isFtp || (isS3 && s3Profile.trim() === '') || (!isS3 && (method === 'password' || method === 'key')))
+  const usesSecret = $derived(isFtp || isRdp || (isS3 && s3Profile.trim() === '') || (!isS3 && (method === 'password' || method === 'key')))
   const valid = $derived(
     isS3
       ? s3Region.trim() !== '' && (s3Profile.trim() !== '' || username.trim() !== '')
-      : host.trim() !== '' &&
+      : isRdp
+        ? host.trim() !== '' && Number.isInteger(port) && port >= 1 && port <= 65535
+        : host.trim() !== '' &&
           username.trim() !== '' &&
           Number.isInteger(port) &&
           port >= 1 &&
@@ -146,12 +157,24 @@
       host: isS3 ? s3Host() : host.trim(),
       port: isS3 ? 443 : port,
       username: username.trim(),
-      auth: { method: isFtp || isS3 ? 'password' : method, keyPath: !isFtp && !isS3 && method === 'key' ? keyPath.trim() : null },
+      auth: { method: isFtp || isS3 || isRdp ? 'password' : method, keyPath: !isFtp && !isS3 && !isRdp && method === 'key' ? keyPath.trim() : null },
       jumpHosts: $state.snapshot(jumps),
       sftp: initial.protocol === 'sftp' ? { startPath: startPath.trim() || null, showHidden } : initial.sftp,
       ftp: isFtp
         ? { security: ftpSecurity, pinnedCert: pinnedCert, startPath: startPath.trim() || null, showHidden }
         : initial.ftp,
+      rdp: isRdp
+        ? {
+            domain: rdpDomain.trim() || null,
+            client: rdpClient,
+            fullscreen: rdpFullscreen,
+            multimon: rdpMultimon,
+            resolution: rdpResolution.trim() || null,
+            redirectClipboard: rdpClipboard,
+            redirectDrives: rdpDrives,
+            gateway: rdpGateway.trim() || null,
+          }
+        : initial.rdp,
       s3: isS3
         ? {
             region: s3Region.trim(),
@@ -202,7 +225,7 @@
 </script>
 
 <Modal
-  title={isS3 ? (isNew ? t('newS3Session') : t('editS3Session')) : isFtp ? (isNew ? t('newFtpSession') : t('editFtpSession')) : isSftp ? (isNew ? t('newSftpSession') : t('editSftpSession')) : isNew ? t('newSession') : t('editSession')}
+  title={isRdp ? (isNew ? t('newRdpSession') : t('editRdpSession')) : isS3 ? (isNew ? t('newS3Session') : t('editS3Session')) : isFtp ? (isNew ? t('newFtpSession') : t('editFtpSession')) : isSftp ? (isNew ? t('newSftpSession') : t('editSftpSession')) : isNew ? t('newSession') : t('editSession')}
   onclose={oncancel}
 >
   <form id="session-form" onsubmit={submit}>
@@ -231,6 +254,9 @@
     </div>
     <label>{t('user')}<input bind:value={username} required autocomplete="off" /></label>
     {/if}
+    {#if isRdp}
+      <label>{t('rdpDomain')}<input bind:value={rdpDomain} autocomplete="off" spellcheck="false" /></label>
+    {/if}
     {#if isFtp}
       <label>
         {t('ftpSecurity')}
@@ -250,7 +276,7 @@
           <button type="button" onclick={() => (pinnedCert = null)}>{t('ftpForgetCert')}</button>
         </div>
       {/if}
-    {:else if !isS3}
+    {:else if !isS3 && !isRdp}
     <label>
       {t('authMethod')}
       <select bind:value={method}>
@@ -292,7 +318,29 @@
     {#if hasStoredSecret}
       <label class="check"><input type="checkbox" bind:checked={clearSecret} /> {t('clearPassword')}</label>
     {/if}
-    {#if !isFtp && !isS3}
+    {#if isRdp}
+      <fieldset>
+        <legend>RDP</legend>
+        <label>
+          {t('rdpClient')}
+          <select bind:value={rdpClient}>
+            <option value="auto">{t('rdpClientAuto')}</option>
+            <option value="mstsc">mstsc (Windows)</option>
+            <option value="windows-app">Windows App (macOS)</option>
+            <option value="freerdp">FreeRDP</option>
+          </select>
+        </label>
+        <label>{t('rdpResolution')}<input bind:value={rdpResolution} placeholder="1920x1080" spellcheck="false" /></label>
+        <label>{t('rdpGateway')}<input bind:value={rdpGateway} placeholder="gateway.example.com" spellcheck="false" /></label>
+        <label class="check"><input type="checkbox" bind:checked={rdpFullscreen} /> {t('rdpFullscreen')}</label>
+        <label class="check"><input type="checkbox" bind:checked={rdpMultimon} /> {t('rdpMultimon')}</label>
+        <label class="check"><input type="checkbox" bind:checked={rdpClipboard} /> {t('rdpClipboard')}</label>
+        <label class="check"><input type="checkbox" bind:checked={rdpDrives} /> {t('rdpDrives')}</label>
+        {#if rdpDrives}<p class="hint warn" role="status">{t('rdpDrivesWarn')}</p>{/if}
+        <p class="hint">{t('rdpPasswordHint')}</p>
+      </fieldset>
+    {/if}
+    {#if !isFtp && !isS3 && !isRdp}
     <fieldset>
       <legend>{t('jumpHosts')}</legend>
       {#each jumps as id, i (id)}
@@ -315,7 +363,7 @@
       {#if jumps.length > 0}<p class="hint">{t('jumpHint')}</p>{/if}
     </fieldset>
     {/if}
-    {#if isSftp && !isS3}
+    {#if isSftp && !isS3 && !isRdp}
       <fieldset>
         <legend>{isFtp ? 'FTP' : t('sftp')}</legend>
         <label>

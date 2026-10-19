@@ -4024,6 +4024,7 @@ dependencies = [
  "opener",
  "pxt-core",
  "pxt-fs",
+ "pxt-rdp",
  "pxt-ssh",
  "serde",
  "serde_json",
@@ -4363,6 +4364,14 @@ dependencies = [
  "thiserror 2.0.21",
  "tokio",
  "tokio-rustls",
+]
+
+[[package]]
+name = "pxt-rdp"
+version = "0.1.0-beta.1"
+dependencies = [
+ "thiserror 2.0.21",
+ "windows",
 ]
 
 [[package]]

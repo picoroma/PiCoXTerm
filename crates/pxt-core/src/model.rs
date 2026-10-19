@@ -102,6 +102,60 @@ pub struct FtpOptions {
     pub show_hidden: bool,
 }
 
+/// Client RDP da usare.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum RdpClient {
+    #[default]
+    Auto,
+    Mstsc,
+    WindowsApp,
+    Freerdp,
+}
+
+/// Opzioni di una sessione RDP (client esterno, D-08). La password sta nel keyring (`credential_ref`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RdpOptions {
+    #[serde(default)]
+    pub domain: Option<String>,
+    #[serde(default)]
+    pub client: RdpClient,
+    #[serde(default)]
+    pub fullscreen: bool,
+    #[serde(default)]
+    pub multimon: bool,
+    /// `LARGHEZZAxALTEZZA`; vuoto = come la finestra.
+    #[serde(default)]
+    pub resolution: Option<String>,
+    #[serde(default = "default_true")]
+    pub redirect_clipboard: bool,
+    /// Condivide le unità del computer col server: disattivato di norma.
+    #[serde(default)]
+    pub redirect_drives: bool,
+    #[serde(default)]
+    pub gateway: Option<String>,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+impl Default for RdpOptions {
+    fn default() -> Self {
+        Self {
+            domain: None,
+            client: RdpClient::Auto,
+            fullscreen: false,
+            multimon: false,
+            resolution: None,
+            redirect_clipboard: true,
+            redirect_drives: false,
+            gateway: None,
+        }
+    }
+}
+
 /// Opzioni di una sessione S3. L'access key sta in `Session.username`, la chiave segreta nel keyring
 /// (`credential_ref`); con `profile` si usa invece un profilo AWS (anche SSO) e non servono chiavi.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -218,6 +272,8 @@ pub struct Session {
     #[serde(default)]
     pub s3: S3Options,
     #[serde(default)]
+    pub rdp: RdpOptions,
+    #[serde(default)]
     pub ui: UiOptions,
     #[serde(default)]
     pub notes: String,
@@ -261,6 +317,7 @@ impl Session {
             sftp: SftpOptions::default(),
             ftp: FtpOptions::default(),
             s3: S3Options::default(),
+            rdp: RdpOptions::default(),
             ui: UiOptions::default(),
             notes: String::new(),
             created_at: now,

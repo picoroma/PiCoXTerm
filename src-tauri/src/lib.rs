@@ -529,6 +529,9 @@ async fn session_test(
     if session.protocol == Protocol::S3 {
         return Ok(s3_test(&state, &session, password).await);
     }
+    if session.protocol == Protocol::Rdp {
+        return Ok(rdp_test(&state, &session).await);
+    }
     if !matches!(session.protocol, Protocol::Ssh | Protocol::Sftp) {
         return Ok(TestResult::new("error", "protocollo non ancora supportato"));
     }
@@ -1377,6 +1380,124 @@ async fn s3_presign(
         .map_err(err))?;
     audit_conn(&state, id, "s3_presign", true, format!("{secs} s"));
     Ok(url)
+}
+
+// ---- Sessioni RDP (client esterno, D-08) ----
+
+fn rdp_params(session: &Session) -> pxt_rdp::RdpParams {
+    let o = &session.rdp;
+    let blank = |v: &Option<String>| v.clone().filter(|s| !s.trim().is_empty());
+    pxt_rdp::RdpParams {
+        host: session.host.clone(),
+        port: session.port,
+        username: session.username.clone(),
+        domain: blank(&o.domain),
+        client: match o.client {
+            pxt_core::RdpClient::Auto => pxt_rdp::Client::Auto,
+            pxt_core::RdpClient::Mstsc => pxt_rdp::Client::Mstsc,
+            pxt_core::RdpClient::WindowsApp => pxt_rdp::Client::WindowsApp,
+            pxt_core::RdpClient::Freerdp => pxt_rdp::Client::FreeRdp,
+        },
+        fullscreen: o.fullscreen,
+        multimon: o.multimon,
+        resolution: blank(&o.resolution),
+        redirect_clipboard: o.redirect_clipboard,
+        redirect_drives: o.redirect_drives,
+        gateway: blank(&o.gateway),
+    }
+}
+
+fn rdp_audit_ctx(session: &Session) -> AuditCtx {
+    AuditCtx {
+        host: session.host.clone(),
+        port: session.port,
+        user: session.username.clone(),
+        via: Vec::new(),
+        protocol: "rdp",
+    }
+}
+
+/// Apre una sessione RDP con il client del sistema. La password (digitata ora o nel keyring) passa
+/// solo dal Credential Manager di Windows e viene tolta poco dopo l'avvio.
+#[tauri::command]
+async fn rdp_open(
+    state: Shared<'_>,
+    session_id: Uuid,
+    password: Option<String>,
+) -> Result<(), String> {
+    let nodes = state.sessions.list().await.map_err(err)?;
+    let session = match nodes.iter().find(|n| n.id() == session_id) {
+        Some(SessionNode::Session(s)) if s.protocol == Protocol::Rdp => (**s).clone(),
+        Some(_) => return Err("la sessione non è una sessione RDP".into()),
+        None => return Err("sessione non trovata".into()),
+    };
+    let ctx = rdp_audit_ctx(&session);
+    if !state.policy.allows(Protocol::Rdp) {
+        state.audit(
+            &ctx,
+            "connect",
+            Outcome::Failed,
+            Some("vietato dalla policy".into()),
+        );
+        return Err("Il protocollo RDP è vietato dalla policy dell'organizzazione.".into());
+    }
+    let secret = match password.filter(|p| !p.is_empty()) {
+        Some(p) => Some(p),
+        None => stored_secret(&state, &session.credential_ref).await?,
+    };
+    let params = rdp_params(&session);
+    let launched = tokio::task::spawn_blocking(move || pxt_rdp::launch(&params, secret.as_deref()))
+        .await
+        .map_err(err)?;
+    match launched {
+        Ok(mut l) => {
+            state.audit(
+                &ctx,
+                "connect",
+                Outcome::Ok,
+                Some("rdp: client di sistema".into()),
+            );
+            // Il client legge file e credenziali nei primi secondi: poi si toglie tutto.
+            tokio::spawn(async move {
+                tokio::time::sleep(pxt_rdp::CLEANUP_DELAY).await;
+                l.finish();
+            });
+            Ok(())
+        }
+        Err(e) => {
+            state.audit(&ctx, "connect", Outcome::Failed, Some(e.to_string()));
+            Err(e.to_string())
+        }
+    }
+}
+
+/// Prova una sessione RDP: verifica solo che la porta risponda (l'autenticazione la fa il client).
+async fn rdp_test(state: &Arc<AppState>, session: &Session) -> TestResult {
+    if !state.policy.allows(Protocol::Rdp) {
+        return TestResult::new(
+            "error",
+            "Il protocollo RDP è vietato dalla policy dell'organizzazione.",
+        );
+    }
+    let addr = format!("{}:{}", session.host.trim(), session.port);
+    let started = std::time::Instant::now();
+    match tokio::time::timeout(
+        std::time::Duration::from_secs(8),
+        tokio::net::TcpStream::connect(&addr),
+    )
+    .await
+    {
+        Ok(Ok(_)) => {
+            let mut r = TestResult::new(
+                "ok",
+                "Il server risponde sulla porta RDP. L'autenticazione la fa il client RDP quando apri la sessione.",
+            );
+            r.elapsed_ms = u64::try_from(started.elapsed().as_millis()).ok();
+            r
+        }
+        Ok(Err(e)) => TestResult::new("error", format!("{addr}: {e}")),
+        Err(_) => TestResult::new("error", format!("{addr}: nessuna risposta entro 8 secondi")),
+    }
 }
 
 /// Policy attiva e l'eventuale avviso (file non valido): la UI vi si adegua (per esempio nasconde l'FTP in chiaro).
@@ -2534,6 +2655,7 @@ pub fn run() {
             sessions_import,
             session_test,
             s3_connect,
+            rdp_open,
             s3_object_info,
             s3_set_headers,
             s3_set_tags,
