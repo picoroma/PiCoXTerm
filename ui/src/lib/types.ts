@@ -34,7 +34,7 @@ export interface Session {
   id: Uuid
   parentId: Uuid | null
   name: string
-  protocol: 'ssh' | 'sftp' | 'ftp' | 's3' | 'rdp'
+  protocol: 'ssh' | 'sftp' | 'ftp' | 's3' | 'rdp' | 'vnc'
   host: string
   port: number
   username: string
@@ -70,6 +70,7 @@ export interface Session {
     gateway: string | null
     pinnedCert: string | null
   }
+  vnc: { viewOnly: boolean; clipboard: boolean }
   ui: SessionUi
   notes: string
   createdAt: string
@@ -117,6 +118,7 @@ export function newSession(parentId: Uuid | null, protocol: Session['protocol'] 
     ftp: { security: 'explicit', pinnedCert: null, startPath: null, showHidden: false },
     s3: { region: 'us-east-1', endpoint: null, pathStyle: false, bucket: null, profile: null, showHidden: false },
     rdp: { domain: null, client: 'auto', fullscreen: false, multimon: false, resolution: null, redirectClipboard: true, redirectDrives: false, gateway: null, pinnedCert: null },
+    vnc: { viewOnly: false, clipboard: true },
     ui: { color: null, icon: null, tags: [], theme: null, fontFamily: null, fontSize: null, background: null },
     notes: '',
     createdAt: now,

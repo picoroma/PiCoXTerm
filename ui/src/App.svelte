@@ -3,6 +3,7 @@
   import Modal from './lib/Modal.svelte'
   import SessionDialog from './lib/SessionDialog.svelte'
   import RdpTab from './lib/RdpTab.svelte'
+  import VncTab from './lib/VncTab.svelte'
   import SessionTree from './lib/SessionTree.svelte'
   import TerminalTab from './lib/TerminalTab.svelte'
   import EditorTab from './lib/EditorTab.svelte'
@@ -25,7 +26,7 @@
   interface Tab {
     key: number
     /** `terminal`: sessione SSH; `sftp`: sessione SFTP; `editor`: file remoto nell'editor integrato (D-19). */
-    kind: 'terminal' | 'sftp' | 'editor' | 'rdp'
+    kind: 'terminal' | 'sftp' | 'editor' | 'rdp' | 'vnc'
     title: string
     target: Target
     /** Collegamento SSH della scheda, per il pannello SFTP (aggiornato dalla scheda stessa). */
@@ -62,7 +63,7 @@
   const panelTab = $derived(
     activeTab?.kind === 'editor'
       ? tabs.find((x) => x.kind === 'terminal' && x.connId === activeTab.connId)
-      : activeTab?.kind === 'sftp' || activeTab?.kind === 'rdp'
+      : activeTab?.kind === 'sftp' || activeTab?.kind === 'rdp' || activeTab?.kind === 'vnc'
         ? undefined
         : activeTab,
   )
@@ -173,6 +174,7 @@
   function openSession(s: Session) {
     if (s.protocol === 'sftp' || s.protocol === 'ftp' || s.protocol === 's3') openSftpTab(s)
     else if (s.protocol === 'rdp') void openRdp(s)
+    else if (s.protocol === 'vnc') openVncTab(s)
     else openTab(s.name, { sessionId: s.id })
   }
 
@@ -198,6 +200,12 @@
     } catch (e) {
       notice = String(e)
     }
+  }
+
+  function openVncTab(s: Session) {
+    const tab: Tab = { key: nextKey++, kind: 'vnc', title: s.name, target: { sessionId: s.id }, connId: null, cwd: '', status: 'connecting', tracking: { state: 'off', shell: null, message: null }, editPath: '', dirty: false }
+    tabs.push(tab)
+    activeKey = tab.key
   }
 
   function openSftpTab(s: Session) {
@@ -264,12 +272,13 @@
   function pickProtocol(protocol: Protocol) {
     const parentId = picking?.parentId ?? null
     picking = null
-    const kind = protocol === 'sftp' || protocol === 'ftp' || protocol === 's3' || protocol === 'rdp' ? protocol : 'ssh'
+    const kind = protocol === 'sftp' || protocol === 'ftp' || protocol === 's3' || protocol === 'rdp' || protocol === 'vnc' ? protocol : 'ssh'
     const s = newSession(parentId, kind)
     // FTP: porta abituale del tipo di protezione predefinito (FTPS esplicito, 21).
     if (kind === 'ftp') s.port = 21
     if (kind === 's3') s.port = 443
     if (kind === 'rdp') s.port = 3389
+    if (kind === 'vnc') s.port = 5900
     editing = { session: s, isNew: true }
   }
 
@@ -405,7 +414,7 @@
           style:border-top-color={sessionUi(tab.target.sessionId)?.color ?? undefined}
           role="presentation"
         >
-          <button role="tab" aria-selected={tab.key === activeKey} title={tab.kind === 'editor' ? tab.editPath : undefined} onclick={() => (activeKey = tab.key)}>{tab.kind === 'editor' ? '✎ ' : tab.kind === 'sftp' ? '⇄ ' : tab.kind === 'rdp' ? '🖵 ' : ''}{tab.title}{tab.dirty ? ' ●' : ''}</button>
+          <button role="tab" aria-selected={tab.key === activeKey} title={tab.kind === 'editor' ? tab.editPath : undefined} onclick={() => (activeKey = tab.key)}>{tab.kind === 'editor' ? '✎ ' : tab.kind === 'sftp' ? '⇄ ' : tab.kind === 'rdp' || tab.kind === 'vnc' ? '🖵 ' : ''}{tab.title}{tab.dirty ? ' ●' : ''}</button>
           <button class="x" aria-label={t('closeTab')} title={t('closeTab')} onclick={() => requestClose(tab.key)}>×</button>
         </div>
       {/each}
@@ -415,6 +424,16 @@
       {#each tabs as tab (tab.key)}
         {#if tab.kind === 'editor' && tab.connId !== null}
           <EditorTab connId={tab.connId} path={tab.editPath} name={tab.title} active={tab.key === activeKey} bind:dirty={tab.dirty} />
+        {:else if tab.kind === 'vnc'}
+          <VncTab
+            target={tab.target}
+            active={tab.key === activeKey}
+            viewOnly={(nodes.find((x) => x.id === tab.target.sessionId) as Session | undefined)?.vnc.viewOnly ?? false}
+            shareClipboard={(nodes.find((x) => x.id === tab.target.sessionId) as Session | undefined)?.vnc.clipboard ?? true}
+            savePassword={tab.target.sessionId ? passwordSaver(tab.target.sessionId) : undefined}
+            bind:connId={tab.connId}
+            bind:status={tab.status}
+          />
         {:else if tab.kind === 'rdp'}
           <RdpTab
             target={tab.target}

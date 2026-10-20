@@ -31,7 +31,9 @@ s3Test.credentialRef = { provider: 'local', id: 's1' }
 s3Test.s3 = { region: 'us-east-1', endpoint: 'http://127.0.0.1:9000', pathStyle: true, bucket: null, profile: null, showHidden: false }
 const rdpWin = { ...newSession(root.id, 'rdp'), name: 'Server Windows (RDP)', host: 'win01.example.com', port: 3389, username: 'admin' }
 rdpWin.credentialRef = { provider: 'local', id: 'r1' }
-let nodes: SessionNode[] = [root, pw, key, prod, test, files, filesPw, ftpTls, ftpPlain, s3Test, rdpWin]
+const vncBox = { ...newSession(root.id, 'vnc'), name: 'Server VNC (VNC)', host: 'vnc01.example.com', port: 5900, username: '' }
+vncBox.credentialRef = { provider: 'local', id: 'v1' }
+let nodes: SessionNode[] = [root, pw, key, prod, test, files, filesPw, ftpTls, ftpPlain, s3Test, rdpWin, vncBox]
 
 let nextCallback = 0
 const callbacks = new Map<number, (m: unknown) => void>()
@@ -177,6 +179,79 @@ const handlers: Record<string, (args: any) => unknown> = {
   ssh_resize: () => {},
   ssh_enable_cwd_tracking: () => ({ type: 'tracking', state: 'active', shell: '/bin/bash', message: null }),
   sftp_home: ({ id }) => (s3Conns.has(id) ? '/' : '/home/u'),
+  // VNC finto: un piccolo server RFB (versione 3.8, nessuna autenticazione) che risponde a noVNC.
+  vnc_connect: ({ request, onData, onEvent }) => {
+    ;(window as any).__lastVncConnect = request
+    const sess: any = nodes.find((n) => n.id === request.sessionId)
+    if (!sess.credentialRef && !request.password) throw 'password-required'
+    const id = ++connSeq
+    const W = 640
+    const H = 400
+    const out = (bytes: number[]) => emit(onData, bytes)
+    const log: any[] = ((window as any).__vncMsgs = [])
+    ;(window as any).__vncEnd = (reason: string) => emit(onEvent, { type: 'vncClosed', reason })
+    // Finto handshake: versione, un tipo di sicurezza (None), esito OK.
+    out([...new TextEncoder().encode('RFB 003.008\n')])
+    out([1, 1, 0, 0, 0, 0])
+    let buf: number[] = []
+    let stage = 'hello'
+    let sentFrame = false
+    const serverInit = () => {
+      const name = [...new TextEncoder().encode('Mock VNC')]
+      const b = [W >> 8, W & 255, H >> 8, H & 255, 32, 24, 0, 1, 0, 255, 0, 255, 0, 255, 16, 8, 0, 0, 0, 0, 0, 0, 0, name.length, ...name]
+      out(b)
+    }
+    const update = () => {
+      const px: number[] = []
+      for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) px.push(80 + Math.round((y / H) * 120), 120, 150 + Math.round((x / W) * 80), 0)
+      out([0, 0, 0, 1, 0, 0, 0, 0, W >> 8, W & 255, H >> 8, H & 255, 0, 0, 0, 0, ...px])
+    }
+    ;(window as any).__vncFeed = (data: number[]) => {
+      buf.push(...data)
+      for (;;) {
+        if (stage === 'hello') {
+          if (buf.length < 13) return
+          buf = buf.slice(13)
+          stage = 'init'
+        } else if (stage === 'init') {
+          if (buf.length < 1) return
+          buf = buf.slice(1)
+          serverInit()
+          stage = 'run'
+        } else {
+          if (buf.length < 1) return
+          const t = buf[0]
+          let n = 0
+          if (t === 0) n = 20
+          else if (t === 2) {
+            if (buf.length < 4) return
+            n = 4 + 4 * ((buf[2] << 8) | buf[3])
+          } else if (t === 3) n = 10
+          else if (t === 4) n = 8
+          else if (t === 5) n = 6
+          else if (t === 6) {
+            if (buf.length < 8) return
+            n = 8 + ((buf[4] << 24) | (buf[5] << 16) | (buf[6] << 8) | buf[7])
+          } else if (t === 251) n = 8
+          else if (t === 255) return
+          else n = buf.length
+          if (buf.length < n) return
+          const msg = buf.slice(0, n)
+          buf = buf.slice(n)
+          log.push({ type: t, bytes: n, data: t === 4 || t === 5 || t === 6 ? msg : undefined })
+          if (t === 3 && !sentFrame) {
+            sentFrame = true
+            update()
+          }
+        }
+      }
+    }
+    return id
+  },
+  vnc_send: (_a: any) => {},
+  vnc_close: () => {
+    ;(window as any).__vncClosed = true
+  },
   rdp_engine_available: () => (window as any).__noEngine !== true,
   // RDP integrato finto: un desktop a gradiente, un riquadro che segue il mouse e la conferma del certificato.
   rdp_connect: async ({ request, onEvent, onFrame }) => {
@@ -514,6 +589,8 @@ const handlers: Record<string, (args: any) => unknown> = {
   invoke: async (cmd: string, args: any) => {
     const h = handlers[cmd]
     if (!h) throw new Error(`mock: comando non gestito ${cmd}`)
+    // L'invio dei byte di noVNC passa un Uint8Array, che non sopravvive al giro JSON: va al finto server così com'è.
+    if (cmd === 'vnc_send') return (window as any).__vncFeed?.(Array.from(args as Uint8Array))
     // Come l'IPC reale: gli argomenti passano per JSON
     return h(args === undefined ? args : JSON.parse(JSON.stringify(args)))
   },

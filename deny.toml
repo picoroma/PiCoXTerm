@@ -48,6 +48,7 @@ exceptions = [
     { allow = ["GPL-3.0-only"], crate = "pxt-fs" },
     { allow = ["GPL-3.0-only"], crate = "pxt-rdp" },
     { allow = ["GPL-3.0-only"], crate = "pxt-rdp-proto" },
+    { allow = ["GPL-3.0-only"], crate = "pxt-vnc" },
     { allow = ["GPL-3.0-only"], crate = "picoxterm-rdp" },
 ]
 

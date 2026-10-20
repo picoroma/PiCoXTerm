@@ -39,6 +39,8 @@ struct AppState {
     shells: Mutex<HashMap<u64, Shell>>,
     /// Connessioni delle sessioni SFTP: senza shell, solo il sottosistema SFTP.
     sftp_conns: Mutex<HashMap<u64, pxt_ssh::SftpConnection>>,
+    /// Sessioni VNC: il lato comandi (invio dei byte di noVNC, chiusura) di ciascuna.
+    vnc: Mutex<HashMap<u64, pxt_vnc::VncHandle>>,
     /// Sessioni RDP integrate: il lato comandi (input, chiusura) di ciascuna.
     rdp: Mutex<HashMap<u64, Arc<pxt_rdp::RdpHandle>>>,
     /// Sessioni SFTP, una per connessione, aperte al primo uso sulla stessa connessione SSH.
@@ -75,6 +77,7 @@ impl AppState {
             shells: Mutex::default(),
             sftp_conns: Mutex::default(),
             rdp: Mutex::default(),
+            vnc: Mutex::default(),
             sftp: tokio::sync::Mutex::default(),
             plans: Mutex::default(),
             jobs: Mutex::default(),
@@ -194,6 +197,10 @@ enum TermEvent {
     },
     Closed {
         exit: Option<u32>,
+    },
+    /// La sessione VNC è finita.
+    VncClosed {
+        reason: String,
     },
     Cwd {
         path: String,
@@ -534,6 +541,9 @@ async fn session_test(
     }
     if session.protocol == Protocol::Rdp {
         return Ok(rdp_test(&state, &session).await);
+    }
+    if session.protocol == Protocol::Vnc {
+        return Ok(vnc_test(&state, &session, password).await);
     }
     if !matches!(session.protocol, Protocol::Ssh | Protocol::Sftp) {
         return Ok(TestResult::new("error", "protocollo non ancora supportato"));
@@ -1716,6 +1726,178 @@ fn rdp_close(state: Shared<'_>, id: u64) {
     }
 }
 
+// ---- Sessioni VNC (noVNC nell'interfaccia, connessione e autenticazione qui) ----
+
+fn vnc_audit_ctx(session: &Session) -> AuditCtx {
+    AuditCtx {
+        host: session.host.clone(),
+        port: session.port,
+        user: String::new(),
+        via: Vec::new(),
+        protocol: "vnc",
+    }
+}
+
+fn find_vnc_session(nodes: &[SessionNode], id: Uuid) -> Result<Session, String> {
+    match nodes.iter().find(|n| n.id() == id) {
+        Some(SessionNode::Session(s)) if s.protocol == Protocol::Vnc => Ok((**s).clone()),
+        Some(_) => Err("la sessione non è una sessione VNC".into()),
+        None => Err("sessione non trovata".into()),
+    }
+}
+
+/// Traduce l'errore del crate nel codice letto dalla UI (`password-required`) o nel testo da mostrare.
+fn vnc_error(e: pxt_vnc::VncError) -> String {
+    match e {
+        pxt_vnc::VncError::PasswordRequired => PASSWORD_REQUIRED.to_string(),
+        other => other.to_string(),
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct VncConnectRequest {
+    session_id: Uuid,
+    /// Password VNC digitata ora dall'utente (ha la precedenza su quella nel keyring).
+    password: Option<String>,
+}
+
+/// Collega una sessione VNC. L'autenticazione la fa il backend (la password non arriva alla UI): a `on_data`
+/// vanno i byte per noVNC (prima un finto handshake senza autenticazione, poi il flusso del server),
+/// a `on_event` la fine della connessione.
+#[tauri::command]
+async fn vnc_connect(
+    state: Shared<'_>,
+    request: VncConnectRequest,
+    on_data: Channel<InvokeResponseBody>,
+    on_event: Channel<TermEvent>,
+) -> Result<u64, String> {
+    let nodes = state.sessions.list().await.map_err(err)?;
+    let session = find_vnc_session(&nodes, request.session_id)?;
+    let ctx = vnc_audit_ctx(&session);
+    if !state.policy.allows(Protocol::Vnc) {
+        state.audit(
+            &ctx,
+            "connect",
+            Outcome::Failed,
+            Some("vietato dalla policy".into()),
+        );
+        return Err("Il protocollo VNC è vietato dalla policy dell'organizzazione.".into());
+    }
+    let password = match request.password.filter(|p| !p.is_empty()) {
+        Some(p) => Some(p),
+        None => stored_secret(&state, &session.credential_ref).await?,
+    };
+    match pxt_vnc::VncSession::connect(&session.host, session.port, password.as_deref()).await {
+        Ok(s) => {
+            state.audit(
+                &ctx,
+                "connect",
+                Outcome::Ok,
+                Some("vnc: senza cifratura".into()),
+            );
+            let id = state.next_id();
+            let pxt_vnc::VncSession { mut events, handle } = s;
+            state.conn_ctx.lock().unwrap().insert(id, ctx.clone());
+            state.vnc.lock().unwrap().insert(id, handle);
+            let pump_state = Arc::clone(&state);
+            tokio::spawn(async move {
+                let mut reason = "chiusa".to_string();
+                while let Some(ev) = events.recv().await {
+                    match ev {
+                        pxt_vnc::VncEvent::Data(d) => {
+                            if on_data.send(InvokeResponseBody::Raw(d)).is_err() {
+                                break;
+                            }
+                        }
+                        pxt_vnc::VncEvent::Closed(r) => {
+                            reason = r;
+                            break;
+                        }
+                    }
+                }
+                let _ = on_event.send(TermEvent::VncClosed { reason });
+                if let Some(h) = pump_state.vnc.lock().unwrap().remove(&id) {
+                    h.close();
+                }
+                pump_state.conn_ctx.lock().unwrap().remove(&id);
+                pump_state.audit(&ctx, "disconnect", Outcome::Ok, None);
+            });
+            Ok(id)
+        }
+        Err(e) => {
+            state.audit(&ctx, "connect", Outcome::Failed, Some(e.to_string()));
+            Err(vnc_error(e))
+        }
+    }
+}
+
+/// Manda al server i byte di noVNC. Il corpo della richiesta è il dato grezzo; l'id della connessione
+/// sta nell'intestazione `x-conn-id`.
+#[tauri::command]
+async fn vnc_send(state: Shared<'_>, request: tauri::ipc::Request<'_>) -> Result<(), String> {
+    let id: u64 = request
+        .headers()
+        .get("x-conn-id")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse().ok())
+        .ok_or("manca l'id della connessione")?;
+    let tauri::ipc::InvokeBody::Raw(data) = request.body() else {
+        return Err("corpo non valido".into());
+    };
+    let handle = state.vnc.lock().unwrap().get(&id).cloned();
+    match handle {
+        Some(h) if h.send(data.clone()).await => Ok(()),
+        _ => Err("sessione VNC chiusa".into()),
+    }
+}
+
+/// Chiude la sessione VNC.
+#[tauri::command]
+fn vnc_close(state: Shared<'_>, id: u64) {
+    if let Some(h) = state.vnc.lock().unwrap().remove(&id) {
+        h.close();
+    }
+}
+
+/// Prova una sessione VNC (anche non salvata): connessione e autenticazione, senza tenerla aperta.
+async fn vnc_test(
+    state: &Arc<AppState>,
+    session: &Session,
+    password: Option<String>,
+) -> TestResult {
+    if !state.policy.allows(Protocol::Vnc) {
+        return TestResult::new(
+            "error",
+            "Il protocollo VNC è vietato dalla policy dell'organizzazione.",
+        );
+    }
+    let secret = match password.filter(|p| !p.is_empty()) {
+        Some(p) => Some(p),
+        None => match stored_secret(state, &session.credential_ref).await {
+            Ok(s) => s,
+            Err(e) => return TestResult::new("error", e),
+        },
+    };
+    let started = std::time::Instant::now();
+    match pxt_vnc::VncSession::connect(&session.host, session.port, secret.as_deref()).await {
+        Ok(s) => {
+            s.handle.close();
+            let mut r = TestResult::new(
+                "ok",
+                "Connessione e autenticazione riuscite. Attenzione: VNC non cifra il traffico.",
+            );
+            r.elapsed_ms = u64::try_from(started.elapsed().as_millis()).ok();
+            r
+        }
+        Err(pxt_vnc::VncError::PasswordRequired) => TestResult::new(
+            "needSecret",
+            "Il server richiede una password VNC: inseriscila nel campo per provare la connessione.",
+        ),
+        Err(e) => TestResult::new("error", e.to_string()),
+    }
+}
+
 /// Policy attiva e l'eventuale avviso (file non valido): la UI vi si adegua (per esempio nasconde l'FTP in chiaro).
 #[tauri::command]
 fn policy_get(state: Shared<'_>) -> serde_json::Value {
@@ -2872,6 +3054,9 @@ pub fn run() {
             session_test,
             s3_connect,
             rdp_open,
+            vnc_connect,
+            vnc_send,
+            vnc_close,
             rdp_connect,
             rdp_engine_available,
             rdp_input,

@@ -162,6 +162,27 @@ impl Default for RdpOptions {
     }
 }
 
+/// Opzioni di una sessione VNC. La password VNC sta nel keyring (`credential_ref`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VncOptions {
+    /// Solo visualizzazione: mouse e tastiera non vengono mandati al server.
+    #[serde(default)]
+    pub view_only: bool,
+    /// Condivide gli appunti (solo testo) con il server.
+    #[serde(default = "default_true")]
+    pub clipboard: bool,
+}
+
+impl Default for VncOptions {
+    fn default() -> Self {
+        Self {
+            view_only: false,
+            clipboard: true,
+        }
+    }
+}
+
 /// Opzioni di una sessione S3. L'access key sta in `Session.username`, la chiave segreta nel keyring
 /// (`credential_ref`); con `profile` si usa invece un profilo AWS (anche SSO) e non servono chiavi.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -280,6 +301,8 @@ pub struct Session {
     #[serde(default)]
     pub rdp: RdpOptions,
     #[serde(default)]
+    pub vnc: VncOptions,
+    #[serde(default)]
     pub ui: UiOptions,
     #[serde(default)]
     pub notes: String,
@@ -324,6 +347,7 @@ impl Session {
             ftp: FtpOptions::default(),
             s3: S3Options::default(),
             rdp: RdpOptions::default(),
+            vnc: VncOptions::default(),
             ui: UiOptions::default(),
             notes: String::new(),
             created_at: now,

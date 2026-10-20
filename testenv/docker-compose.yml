@@ -76,3 +76,15 @@ services:
     shm_size: "1gb"
     ports:
       - "127.0.0.1:3390:3389"
+
+  # Server VNC (TigerVNC + Xfce) su 127.0.0.1:5901, solo su loopback. La password VNC conta al massimo
+  # 8 caratteri (limite del protocollo). Serve per provare il client VNC.
+  vnc:
+    image: consol/rocky-xfce-vnc:latest
+    container_name: pxt-test-vnc
+    shm_size: "512mb"
+    environment:
+      - VNC_PW=pxtvnc12
+      - VNC_RESOLUTION=1280x800
+    ports:
+      - "127.0.0.1:5901:5901"

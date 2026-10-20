@@ -56,7 +56,10 @@
   const isS3 = initial.protocol === 's3'
   /** Sessione che apre un file browser (SFTP o FTP): niente terminale, tema e font. */
   const isRdp = initial.protocol === 'rdp'
-  const isSftp = initial.protocol === 'sftp' || isFtp || isS3 || isRdp
+  const isVnc = initial.protocol === 'vnc'
+  const isSftp = initial.protocol === 'sftp' || isFtp || isS3 || isRdp || isVnc
+  let vncViewOnly = $state(initial.vnc.viewOnly)
+  let vncClipboard = $state(initial.vnc.clipboard)
   let rdpDomain = $state(initial.rdp.domain ?? '')
   let rdpClient = $state(initial.rdp.client)
   let rdpFullscreen = $state(initial.rdp.fullscreen)
@@ -90,11 +93,11 @@
     ftpSecurity = next
   }
 
-  const usesSecret = $derived(isFtp || isRdp || (isS3 && s3Profile.trim() === '') || (!isS3 && (method === 'password' || method === 'key')))
+  const usesSecret = $derived(isFtp || isRdp || isVnc || (isS3 && s3Profile.trim() === '') || (!isS3 && (method === 'password' || method === 'key')))
   const valid = $derived(
     isS3
       ? s3Region.trim() !== '' && (s3Profile.trim() !== '' || username.trim() !== '')
-      : isRdp
+      : isRdp || isVnc
         ? host.trim() !== '' && Number.isInteger(port) && port >= 1 && port <= 65535
         : host.trim() !== '' &&
           username.trim() !== '' &&
@@ -158,12 +161,13 @@
       host: isS3 ? s3Host() : host.trim(),
       port: isS3 ? 443 : port,
       username: username.trim(),
-      auth: { method: isFtp || isS3 || isRdp ? 'password' : method, keyPath: !isFtp && !isS3 && !isRdp && method === 'key' ? keyPath.trim() : null },
+      auth: { method: isFtp || isS3 || isRdp || isVnc ? 'password' : method, keyPath: !isFtp && !isS3 && !isRdp && !isVnc && method === 'key' ? keyPath.trim() : null },
       jumpHosts: $state.snapshot(jumps),
       sftp: initial.protocol === 'sftp' ? { startPath: startPath.trim() || null, showHidden } : initial.sftp,
       ftp: isFtp
         ? { security: ftpSecurity, pinnedCert: pinnedCert, startPath: startPath.trim() || null, showHidden }
         : initial.ftp,
+      vnc: isVnc ? { viewOnly: vncViewOnly, clipboard: vncClipboard } : initial.vnc,
       rdp: isRdp
         ? {
             domain: rdpDomain.trim() || null,
@@ -227,7 +231,7 @@
 </script>
 
 <Modal
-  title={isRdp ? (isNew ? t('newRdpSession') : t('editRdpSession')) : isS3 ? (isNew ? t('newS3Session') : t('editS3Session')) : isFtp ? (isNew ? t('newFtpSession') : t('editFtpSession')) : isSftp ? (isNew ? t('newSftpSession') : t('editSftpSession')) : isNew ? t('newSession') : t('editSession')}
+  title={isVnc ? (isNew ? t('newVncSession') : t('editVncSession')) : isRdp ? (isNew ? t('newRdpSession') : t('editRdpSession')) : isS3 ? (isNew ? t('newS3Session') : t('editS3Session')) : isFtp ? (isNew ? t('newFtpSession') : t('editFtpSession')) : isSftp ? (isNew ? t('newSftpSession') : t('editSftpSession')) : isNew ? t('newSession') : t('editSession')}
   onclose={oncancel}
 >
   <form id="session-form" onsubmit={submit}>
@@ -254,7 +258,9 @@
       <label class="grow">{t('host')}<input bind:value={host} required /></label>
       <label class="narrow">{t('port')}<input type="number" min="1" max="65535" bind:value={port} required /></label>
     </div>
-    <label>{t('user')}<input bind:value={username} required autocomplete="off" /></label>
+    {#if !isVnc}
+      <label>{t('user')}<input bind:value={username} required autocomplete="off" /></label>
+    {/if}
     {/if}
     {#if isRdp}
       <label>{t('rdpDomain')}<input bind:value={rdpDomain} autocomplete="off" spellcheck="false" /></label>
@@ -278,7 +284,7 @@
           <button type="button" onclick={() => (pinnedCert = null)}>{t('ftpForgetCert')}</button>
         </div>
       {/if}
-    {:else if !isS3 && !isRdp}
+    {:else if !isS3 && !isRdp && !isVnc}
     <label>
       {t('authMethod')}
       <select bind:value={method}>
@@ -302,7 +308,7 @@
     {/if}
     {#if usesSecret}
       <label>
-        {isS3 ? t('s3SecretKey') : method === 'key' ? t('passphrase') : t('password')}
+        {isVnc ? t('vncPassword') : isS3 ? t('s3SecretKey') : method === 'key' ? t('passphrase') : t('password')}
         <input
           type="password"
           bind:value={secret}
@@ -349,7 +355,16 @@
         <p class="hint">{t('rdpPasswordHint')}</p>
       </fieldset>
     {/if}
-    {#if !isFtp && !isS3 && !isRdp}
+    {#if isVnc}
+      <fieldset>
+        <legend>VNC</legend>
+        <label class="check"><input type="checkbox" bind:checked={vncViewOnly} /> {t('vncViewOnly')}</label>
+        <label class="check"><input type="checkbox" bind:checked={vncClipboard} /> {t('rdpClipboard')}</label>
+        <p class="hint warn" role="status">{t('vncPlainWarning')}</p>
+        <p class="hint">{t('vncPasswordHint')}</p>
+      </fieldset>
+    {/if}
+    {#if !isFtp && !isS3 && !isRdp && !isVnc}
     <fieldset>
       <legend>{t('jumpHosts')}</legend>
       {#each jumps as id, i (id)}
@@ -372,7 +387,7 @@
       {#if jumps.length > 0}<p class="hint">{t('jumpHint')}</p>{/if}
     </fieldset>
     {/if}
-    {#if isSftp && !isS3 && !isRdp}
+    {#if isSftp && !isS3 && !isRdp && !isVnc}
       <fieldset>
         <legend>{isFtp ? 'FTP' : t('sftp')}</legend>
         <label>
