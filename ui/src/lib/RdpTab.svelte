@@ -4,6 +4,7 @@
   import { readText, writeText } from '@tauri-apps/plugin-clipboard-manager'
   import ConnectPrompts, { type CertRequest } from './ConnectPrompts.svelte'
   import { CTRL_ALT_DEL, parseFrame, scancodeOf, type RdpFrame } from './rdp'
+  import { handoff } from './detach'
   import { t } from '../i18n'
   import type { Target } from './types'
 
@@ -15,6 +16,7 @@
     onpincert,
     savePassword,
     shareClipboard = true,
+    attachConnId,
     connId = $bindable(null),
     status = $bindable('connecting'),
   }: {
@@ -25,6 +27,8 @@
     savePassword?: (password: string) => Promise<void>
     /** Gli appunti (solo testo) sono condivisi con il server per questa sessione. */
     shareClipboard?: boolean
+    /** La sessione esiste già nel backend (scheda staccata o riagganciata): ci si collega invece di aprirne una. */
+    attachConnId?: number
     connId?: number | null
     status?: 'connecting' | 'connected' | 'closed'
   } = $props()
@@ -67,17 +71,8 @@
     return { width: Math.min(w, 4096), height: Math.min(h, 4096) }
   }
 
-  async function connect(password?: string, pinnedCert?: string) {
-    error = ''
-    endReason = ''
-    status = 'connecting'
-    lastPassword = password
-    ctx = null
-    early = []
-    const onEvent = new Channel<TermEvent>()
-    onEvent.onmessage = (ev) => {
-      if (ev.type === 'certUntrusted') certPrompt = ev as { type: 'certUntrusted' } & CertRequest
-    }
+  /** Il canale su cui il backend manda i fotogrammi, con il loro trattamento. */
+  function frameChannel(): Channel<ArrayBuffer | number[]> {
     const onFrame = new Channel<ArrayBuffer | number[]>()
     onFrame.onmessage = (buf) => {
       const f = parseFrame(buf)
@@ -108,6 +103,55 @@
       if (ctx) paint(f)
       else early.push(f)
     }
+    return onFrame
+  }
+
+  /** Dimensiona il canvas sul desktop e disegna quanto è già arrivato. */
+  async function startCanvas(width: number, height: number) {
+    desktop = { width, height }
+    await tick()
+    if (canvas) {
+      canvas.width = width
+      canvas.height = height
+      ctx = canvas.getContext('2d', { alpha: false })
+      ctx?.fillRect(0, 0, width, height)
+      for (const f of early) if (f) paint(f)
+      early = []
+      canvas.focus()
+    }
+  }
+
+  /** Riprende una sessione già aperta (la scheda arriva da un'altra finestra): l'immagine intera la rimanda il motore. */
+  async function attach(id: number) {
+    error = ''
+    endReason = ''
+    status = 'connecting'
+    ctx = null
+    early = []
+    const onFrame = frameChannel()
+    try {
+      const r = await invoke<{ id: number; width: number; height: number }>('rdp_attach', { id, onFrame })
+      connId = r.id
+      status = 'connected'
+      await startCanvas(r.width, r.height)
+    } catch (e) {
+      status = 'closed'
+      error = String(e)
+    }
+  }
+
+  async function connect(password?: string, pinnedCert?: string) {
+    error = ''
+    endReason = ''
+    status = 'connecting'
+    lastPassword = password
+    ctx = null
+    early = []
+    const onEvent = new Channel<TermEvent>()
+    onEvent.onmessage = (ev) => {
+      if (ev.type === 'certUntrusted') certPrompt = ev as { type: 'certUntrusted' } & CertRequest
+    }
+    const onFrame = frameChannel()
     const size = areaSize()
     try {
       const r = await invoke<{ id: number; width: number; height: number }>('rdp_connect', {
@@ -115,20 +159,9 @@
         onEvent,
         onFrame,
       })
-      desktop = { width: r.width, height: r.height }
       connId = r.id
       status = 'connected'
-      // Il canvas ha la dimensione del desktop; poi si disegna quanto è già arrivato.
-      await tick()
-      if (canvas) {
-        canvas.width = r.width
-        canvas.height = r.height
-        ctx = canvas.getContext('2d', { alpha: false })
-        ctx?.fillRect(0, 0, r.width, r.height)
-        for (const f of early) if (f) paint(f)
-        early = []
-        canvas.focus()
-      }
+      await startCanvas(r.width, r.height)
     } catch (e) {
       status = 'closed'
       const msg = String(e)
@@ -317,10 +350,12 @@
       ro.observe(wrap)
       area = { width: wrap.clientWidth, height: wrap.clientHeight }
     }
-    void connect()
+    if (attachConnId !== undefined) void attach(attachConnId)
+    else void connect()
     return () => {
       ro.disconnect()
-      if (connId !== null) void invoke('rdp_close', { id: connId })
+      // Una scheda che passa a un'altra finestra non chiude la sessione.
+      if (connId !== null && !handoff.has(connId)) void invoke('rdp_close', { id: connId })
     }
   })
 

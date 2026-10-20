@@ -69,6 +69,8 @@ pub enum ToEngine {
         width: u16,
         height: u16,
     },
+    /// Rimanda l'immagine intera del desktop (una finestra nuova è subentrata a quella che disegnava).
+    Repaint,
     Close,
 }
 
@@ -122,6 +124,7 @@ const T_INPUT: u8 = 0x02;
 const T_CLOSE: u8 = 0x03;
 const T_SET_CLIPBOARD: u8 = 0x04;
 const T_RESIZE: u8 = 0x05;
+const T_REPAINT: u8 = 0x06;
 const T_CONNECTED: u8 = 0x10;
 const T_CERT: u8 = 0x11;
 const T_FAILED: u8 = 0x12;
@@ -171,6 +174,7 @@ pub fn write_to_engine(out: &mut impl Write, m: &ToEngine) -> io::Result<()> {
             b[2..].copy_from_slice(&height.to_le_bytes());
             put(out, T_RESIZE, &b)
         }
+        ToEngine::Repaint => put(out, T_REPAINT, &[]),
         ToEngine::Close => put(out, T_CLOSE, &[]),
     }
 }
@@ -232,6 +236,7 @@ pub fn read_to_engine(input: &mut impl Read) -> io::Result<Option<ToEngine>> {
         T_CONNECT => ToEngine::Connect(from_json(&body)?),
         T_INPUT => ToEngine::Input(from_json(&body)?),
         T_CLOSE => ToEngine::Close,
+        T_REPAINT => ToEngine::Repaint,
         T_SET_CLIPBOARD => ToEngine::SetClipboard(String::from_utf8_lossy(&body).into_owned()),
         T_RESIZE => {
             let (width, height) = two_u16(&body)?;
@@ -451,6 +456,13 @@ mod tests {
                 width: 1280,
                 height: 720
             }
+        ));
+        write_to_engine(&mut buf, &ToEngine::Repaint).unwrap();
+        assert!(matches!(
+            read_to_engine(&mut buf[buf.len() - 5..].as_ref())
+                .unwrap()
+                .unwrap(),
+            ToEngine::Repaint
         ));
         let mut short = Vec::new();
         put(&mut short, T_RESIZE, &[1, 2, 3]).unwrap();

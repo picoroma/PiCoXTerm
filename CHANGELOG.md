@@ -6,6 +6,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
 ## [Unreleased]
 
 ### Added
+- **Detach a tab into its own window** (file sessions: SFTP, FTP, S3; and RDP): use the button or the context menu of the tab, or drag the tab out of the window. The live session moves as it is, with no reconnection or new login; closing the window asks whether to dock it back or end the session, and the main window keeps a placeholder with "Bring to front" and "Dock back". SSH terminals, VNC and editors cannot be detached yet.
 - **VNC sessions in a tab** (noVNC): mouse, keyboard, text clipboard, Ctrl+Alt+Del, fit to window, full screen and "auto resolution" (the server resizes its desktop with the tab when it supports it). The VNC password is kept in the keyring and **never reaches the interface code**: the backend does the authentication with the real server and presents noVNC a server that asks for nothing. Supports RFB 3.7/3.8 with no authentication or VNC Authentication; other security types (VeNCrypt, Tight, RSA-AES) are refused with a clear message. VNC does not encrypt traffic: a warning says so. No listening ports. Tunnelling over SSH is not included yet.
 
 ## [0.1.0-beta.3] - 2026-10-20

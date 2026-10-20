@@ -42,7 +42,7 @@ struct AppState {
     /// Sessioni VNC: il lato comandi (invio dei byte di noVNC, chiusura) di ciascuna.
     vnc: Mutex<HashMap<u64, pxt_vnc::VncHandle>>,
     /// Sessioni RDP integrate: il lato comandi (input, chiusura) di ciascuna.
-    rdp: Mutex<HashMap<u64, Arc<pxt_rdp::RdpHandle>>>,
+    rdp: Mutex<HashMap<u64, Arc<RdpEntry>>>,
     /// Sessioni SFTP, una per connessione, aperte al primo uso sulla stessa connessione SSH.
     sftp: tokio::sync::Mutex<HashMap<u64, Arc<AnyFs>>>,
     /// Policy dell'organizzazione (`policy.json`, sola lettura) e l'eventuale avviso se non è valida.
@@ -1513,6 +1513,15 @@ async fn rdp_test(state: &Arc<AppState>, session: &Session) -> TestResult {
     }
 }
 
+/// Una sessione RDP integrata: il lato comandi e la **destinazione dei fotogrammi**, che si può cambiare
+/// (UNTAB: la scheda passa a un'altra finestra senza perdere la sessione).
+struct RdpEntry {
+    handle: pxt_rdp::RdpHandle,
+    sink: Mutex<Channel<InvokeResponseBody>>,
+    /// Dimensione attuale del desktop, per chi subentra.
+    size: Mutex<(u16, u16)>,
+}
+
 // ---- Sessioni RDP integrate (D-32): il motore `picoxterm-rdp` in un processo a parte ----
 
 /// Marcatori dei messaggi binari verso la scheda: aggiornamento di grafica o fine della sessione.
@@ -1602,7 +1611,12 @@ async fn rdp_connect(
             let (width, height) = (s.width, s.height);
             let (mut events, handle) = s.split();
             state.conn_ctx.lock().unwrap().insert(id, ctx.clone());
-            state.rdp.lock().unwrap().insert(id, Arc::new(handle));
+            let entry = Arc::new(RdpEntry {
+                handle,
+                sink: Mutex::new(on_frame),
+                size: Mutex::new((width, height)),
+            });
+            state.rdp.lock().unwrap().insert(id, Arc::clone(&entry));
             let pump_state = Arc::clone(&state);
             tokio::spawn(async move {
                 while let Some(ev) = events.recv().await {
@@ -1628,6 +1642,7 @@ async fn rdp_connect(
                             (b, true)
                         }
                         pxt_rdp::RdpEvent::Resized { width, height } => {
+                            *entry.size.lock().unwrap() = (width, height);
                             let mut b = vec![RDP_MSG_RESIZED];
                             b.extend_from_slice(&width.to_le_bytes());
                             b.extend_from_slice(&height.to_le_bytes());
@@ -1640,8 +1655,11 @@ async fn rdp_connect(
                         }
                         _ => continue,
                     };
-                    let gone = on_frame.send(InvokeResponseBody::Raw(body)).is_err();
-                    if ended || gone {
+                    // Se la finestra che disegnava è sparita (o sta cambiando) il fotogramma si perde, ma la
+                    // sessione continua: la scheda può essere ripresa con `rdp_attach`.
+                    let sink = entry.sink.lock().unwrap().clone();
+                    let _ = sink.send(InvokeResponseBody::Raw(body));
+                    if ended {
                         break;
                     }
                 }
@@ -1690,9 +1708,9 @@ fn rdp_engine_available() -> bool {
 /// Manda mouse, rotella o tasti alla sessione RDP.
 #[tauri::command]
 fn rdp_input(state: Shared<'_>, id: u64, input: pxt_rdp::RdpInput) -> Result<(), String> {
-    let handle = state.rdp.lock().unwrap().get(&id).cloned();
-    match handle {
-        Some(h) if h.send(input) => Ok(()),
+    let entry = state.rdp.lock().unwrap().get(&id).cloned();
+    match entry {
+        Some(e) if e.handle.send(input) => Ok(()),
         _ => Err("sessione RDP chiusa".into()),
     }
 }
@@ -1701,9 +1719,9 @@ fn rdp_input(state: Shared<'_>, id: u64, input: pxt_rdp::RdpInput) -> Result<(),
 /// condivisi per questa sessione).
 #[tauri::command]
 fn rdp_clipboard_set(state: Shared<'_>, id: u64, text: String) -> Result<(), String> {
-    let handle = state.rdp.lock().unwrap().get(&id).cloned();
-    match handle {
-        Some(h) if h.send_clipboard(text) => Ok(()),
+    let entry = state.rdp.lock().unwrap().get(&id).cloned();
+    match entry {
+        Some(e) if e.handle.send_clipboard(text) => Ok(()),
         _ => Err("sessione RDP chiusa".into()),
     }
 }
@@ -1711,9 +1729,9 @@ fn rdp_clipboard_set(state: Shared<'_>, id: u64, text: String) -> Result<(), Str
 /// Chiede una nuova risoluzione del desktop remoto (si adatta all'area della scheda).
 #[tauri::command]
 fn rdp_resize(state: Shared<'_>, id: u64, width: u16, height: u16) -> Result<(), String> {
-    let handle = state.rdp.lock().unwrap().get(&id).cloned();
-    match handle {
-        Some(h) if h.resize(width, height) => Ok(()),
+    let entry = state.rdp.lock().unwrap().get(&id).cloned();
+    match entry {
+        Some(e) if e.handle.resize(width, height) => Ok(()),
         _ => Err("sessione RDP chiusa".into()),
     }
 }
@@ -1721,9 +1739,30 @@ fn rdp_resize(state: Shared<'_>, id: u64, width: u16, height: u16) -> Result<(),
 /// Chiude la sessione RDP (e il motore).
 #[tauri::command]
 fn rdp_close(state: Shared<'_>, id: u64) {
-    if let Some(h) = state.rdp.lock().unwrap().remove(&id) {
-        h.close();
+    if let Some(e) = state.rdp.lock().unwrap().remove(&id) {
+        e.handle.close();
     }
+}
+
+/// UNTAB: la sessione RDP `id` passa a un'altra finestra. I fotogrammi da ora vanno a `on_frame` e il
+/// motore rimanda l'immagine intera del desktop, così la finestra nuova non parte da uno schermo vuoto.
+#[tauri::command]
+fn rdp_attach(
+    state: Shared<'_>,
+    id: u64,
+    on_frame: Channel<InvokeResponseBody>,
+) -> Result<RdpConnected, String> {
+    let entry = state
+        .rdp
+        .lock()
+        .unwrap()
+        .get(&id)
+        .cloned()
+        .ok_or("sessione RDP chiusa")?;
+    *entry.sink.lock().unwrap() = on_frame;
+    entry.handle.repaint();
+    let (width, height) = *entry.size.lock().unwrap();
+    Ok(RdpConnected { id, width, height })
 }
 
 // ---- Sessioni VNC (noVNC nell'interfaccia, connessione e autenticazione qui) ----
@@ -1895,6 +1934,76 @@ async fn vnc_test(
             "Il server richiede una password VNC: inseriscila nel campo per provare la connessione.",
         ),
         Err(e) => TestResult::new("error", e.to_string()),
+    }
+}
+
+// ---- UNTAB: schede in finestre proprie ----
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DetachRequest {
+    /// Tipo di scheda (`sftp`, `ftp`, `s3`, `rdp`...): decide che vista mostrare nella finestra.
+    kind: String,
+    conn_id: u64,
+    session_id: Option<Uuid>,
+    title: String,
+    /// Dati in più per la vista (per esempio la cartella corrente), come JSON.
+    #[serde(default)]
+    extra: serde_json::Value,
+}
+
+/// Apre una finestra per una scheda staccata. La connessione resta quella di prima: la finestra la
+/// riprende dal numero. Se esiste già, la porta in primo piano. Restituisce l'etichetta.
+#[tauri::command]
+async fn window_detach(app: tauri::AppHandle, request: DetachRequest) -> Result<String, String> {
+    let label = format!("detached-{}-{}", request.kind, request.conn_id);
+    if let Some(w) = app.get_webview_window(&label) {
+        let _ = w.set_focus();
+        return Ok(label);
+    }
+    let init = serde_json::json!({
+        "kind": request.kind,
+        "connId": request.conn_id,
+        "sessionId": request.session_id,
+        "title": request.title,
+        "extra": request.extra,
+        "label": label,
+    });
+    // I dati arrivano alla pagina con uno script iniziale (più robusto di una query nell'indirizzo).
+    tauri::WebviewWindowBuilder::new(&app, &label, tauri::WebviewUrl::App("index.html".into()))
+        .title(&request.title)
+        .inner_size(1100.0, 720.0)
+        .min_inner_size(480.0, 320.0)
+        .initialization_script(format!("window.__DETACHED__ = {init};"))
+        .build()
+        .map_err(err)?;
+    Ok(label)
+}
+
+/// Porta in primo piano la finestra di una scheda staccata.
+#[tauri::command]
+fn window_focus(app: tauri::AppHandle, label: String) {
+    if let Some(w) = app.get_webview_window(&label) {
+        let _ = w.unminimize();
+        let _ = w.set_focus();
+    }
+}
+
+/// Chiude la finestra di una scheda staccata e avvisa la finestra principale con l'evento
+/// `detached-finished` (`action`: `redock` = riprendi la scheda, la connessione non si tocca; `ended` = la
+/// sessione è stata chiusa, togli la scheda; `none` = niente, chiude solo la finestra).
+#[tauri::command]
+fn window_finish(app: tauri::AppHandle, label: String, action: String, info: serde_json::Value) {
+    use tauri::Emitter as _;
+    if action != "none" {
+        let _ = app.emit_to(
+            "main",
+            "detached-finished",
+            serde_json::json!({ "action": action, "info": info }),
+        );
+    }
+    if let Some(w) = app.get_webview_window(&label) {
+        let _ = w.destroy();
     }
 }
 
@@ -3034,6 +3143,20 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_dialog::init())
+        .on_window_event(|window, event| {
+            use tauri::{Emitter as _, Manager as _, WindowEvent};
+            if let WindowEvent::CloseRequested { api, .. } = event {
+                let label = window.label();
+                if label.starts_with("detached-") {
+                    // La scheda staccata non si chiude da sola: la finestra chiede se riagganciare o chiudere.
+                    api.prevent_close();
+                    let _ = window.emit("detached-close-requested", ());
+                } else if label == "main" {
+                    // Chiudendo la finestra principale finisce l'app, con le schede staccate.
+                    window.app_handle().exit(0);
+                }
+            }
+        })
         .setup(|app| {
             let dir = resolve_data_dir(app)?;
             external_cleanup_stale();
@@ -3063,6 +3186,10 @@ pub fn run() {
             rdp_clipboard_set,
             rdp_resize,
             rdp_close,
+            rdp_attach,
+            window_detach,
+            window_focus,
+            window_finish,
             s3_object_info,
             s3_set_headers,
             s3_set_tags,

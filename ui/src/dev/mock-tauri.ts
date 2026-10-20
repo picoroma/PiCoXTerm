@@ -318,6 +318,37 @@ const handlers: Record<string, (args: any) => unknown> = {
   rdp_input: ({ input }) => {
     ;((window as any).__rdpInputs ??= []).push(input)
   },
+  window_detach: ({ request }) => {
+    const label = `detached-${request.kind}-${request.connId}`
+    ;((window as any).__detached ??= []).push({ label, request })
+    return label
+  },
+  window_focus: () => {},
+  window_finish: ({ label, action, info }) => {
+    ;((window as any).__finished ??= []).push({ label, action, info })
+  },
+  rdp_attach: async ({ id, onFrame }) => {
+    const w = 640
+    const h = 400
+    ;(window as any).__rdpAttached = id
+    setTimeout(() => {
+      const b = new Uint8Array(9 + w * h * 4)
+      b[0] = 1
+      const dv = new DataView(b.buffer)
+      dv.setUint16(1, 0, true)
+      dv.setUint16(3, 0, true)
+      dv.setUint16(5, w, true)
+      dv.setUint16(7, h, true)
+      for (let i = 0; i < w * h; i++) {
+        b[9 + i * 4] = 30
+        b[9 + i * 4 + 1] = 160
+        b[9 + i * 4 + 2] = 90
+        b[9 + i * 4 + 3] = 255
+      }
+      emit(onFrame, Array.from(b))
+    }, 50)
+    return { id, width: w, height: h }
+  },
   rdp_close: () => {
     ;(window as any).__rdpClosed = true
   },
@@ -553,7 +584,14 @@ const handlers: Record<string, (args: any) => unknown> = {
     ;(window as any).__clipboard = a?.text
   },
   'plugin:clipboard-manager|read_text': () => (window as any).__clipboard ?? '',
-  'plugin:event|listen': () => 1,
+  'plugin:event|listen': ({ event, handler }) => {
+    const w = window as any
+    ;(w.__listeners ??= {})[event] = [...(w.__listeners[event] ?? []), handler]
+    w.__emitEvent ??= (name: string, payload: unknown) => {
+      for (const h of w.__listeners[name] ?? []) callbacks.get(h)?.({ event: name, id: 0, payload })
+    }
+    return 1
+  },
   'plugin:event|unlisten': () => {},
   // Trasferimenti finti: il piano ha conflitti se la cartella di destinazione contiene "conflict".
   transfer_plan_upload: ({ localPaths, remoteDir }) => makePlan('upload', localPaths.length * 2, remoteDir),

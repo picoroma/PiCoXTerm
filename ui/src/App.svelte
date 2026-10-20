@@ -19,6 +19,9 @@
   import { loadSettings } from './lib/settings.svelte'
   import { deleteNode, duplicateSession, listNodes, saveNode } from './lib/api'
   import { invoke } from '@tauri-apps/api/core'
+  import { listen } from '@tauri-apps/api/event'
+  import { placeMenu } from './lib/menu'
+  import { closeConnection, handoff, type DetachedKind } from './lib/detach'
   import { newFolder, newSession, type SftpEntry, type TrackingInfo, type Folder, type Session, type SessionNode, type Target, type Uuid } from './lib/types'
   import type { Protocol } from './lib/protocols'
   import { t } from './i18n'
@@ -37,6 +40,10 @@
     /** Solo per gli editor: percorso del file remoto e presenza di modifiche non salvate. */
     editPath: string
     dirty: boolean
+    /** La scheda sta in una finestra separata (etichetta della finestra); qui resta un segnaposto. */
+    detached?: string | null
+    /** Connessione già aperta da riprendere (scheda riagganciata). */
+    attachConn?: number | null
   }
 
   let nodes = $state<SessionNode[]>([])
@@ -129,7 +136,87 @@
   onMount(() => {
     void reload()
     loadSettings().catch((e) => (notice = String(e)))
+    // Una finestra staccata si è chiusa: riprendere la scheda o toglierla.
+    const unlisten = listen<{ action: 'redock' | 'ended'; info: { label: string; connId: number } }>('detached-finished', (e) => {
+      const { action, info } = e.payload
+      const tab = tabs.find((x) => x.detached === info.label)
+      if (!tab) return
+      if (action === 'redock') {
+        handoff.delete(info.connId)
+        tab.attachConn = info.connId
+        tab.detached = null
+      } else {
+        handoff.delete(info.connId)
+        tab.detached = null
+        closeTab(tab.key)
+      }
+    })
+    return () => void unlisten.then((f) => f())
   })
+
+  // ---- UNTAB: schede in finestre proprie (per ora file e RDP) ----
+
+  /** Il protocollo con cui si riapre la scheda in una finestra staccata, se la scheda si può staccare. */
+  function detachKind(tab: Tab): DetachedKind | null {
+    if (tab.detached || tab.connId === null || tab.status !== 'connected') return null
+    if (tab.kind === 'rdp') return 'rdp'
+    if (tab.kind === 'sftp') {
+      const p = sessionProtocol(tab.target.sessionId)
+      return p === 'ftp' || p === 's3' ? p : 'sftp'
+    }
+    return null
+  }
+
+  async function detach(tab: Tab) {
+    const kind = detachKind(tab)
+    if (!kind || tab.connId === null) return
+    const connId = tab.connId
+    handoff.add(connId)
+    try {
+      const label = await invoke<string>('window_detach', {
+        request: { kind, connId, sessionId: tab.target.sessionId ?? null, title: tab.title, extra: null },
+      })
+      tab.detached = label
+    } catch (e) {
+      handoff.delete(connId)
+      notice = String(e)
+    }
+  }
+
+  /** Dal segnaposto: riporta la scheda nella finestra principale. */
+  async function redock(tab: Tab) {
+    const label = tab.detached
+    if (!label || tab.connId === null) return
+    handoff.delete(tab.connId)
+    tab.attachConn = tab.connId
+    tab.detached = null
+    await invoke('window_finish', { label, action: 'none', info: null }).catch(() => {})
+  }
+
+  let tabMenu = $state<{ x: number; y: number; tab: Tab } | null>(null)
+  let tabsEl = $state<HTMLElement>()
+  /** Trascinamento di una scheda: se la si rilascia lontano dalla barra, si stacca. */
+  let tabDrag: { tab: Tab; x: number; y: number; moved: boolean } | null = null
+
+  function tabPointerDown(e: PointerEvent, tab: Tab) {
+    if (e.button !== 0 || !detachKind(tab)) return
+    ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
+    tabDrag = { tab, x: e.clientX, y: e.clientY, moved: false }
+  }
+
+  function tabPointerMove(e: PointerEvent) {
+    if (tabDrag && Math.hypot(e.clientX - tabDrag.x, e.clientY - tabDrag.y) > 8) tabDrag.moved = true
+  }
+
+  function tabPointerUp(e: PointerEvent) {
+    const d = tabDrag
+    tabDrag = null
+    if (!d?.moved || !tabsEl) return
+    const bar = tabsEl.getBoundingClientRect()
+    const away =
+      e.clientY > bar.bottom + 60 || e.clientY < -8 || e.clientX < -8 || e.clientX > window.innerWidth + 8 || e.clientY > window.innerHeight + 8
+    if (away) void detach(d.tab)
+  }
 
   function openTab(title: string, target: Target) {
     const tab: Tab = { key: nextKey++, kind: 'terminal', title, target, connId: null, cwd: '', status: 'connecting', tracking: { state: 'pending', shell: null, message: null }, editPath: '', dirty: false }
@@ -167,6 +254,14 @@
   function closeTab(key: number) {
     const i = tabs.findIndex((x) => x.key === key)
     if (i < 0) return
+    const gone = tabs[i]
+    // Una scheda staccata: si chiudono la finestra e la connessione, che la scheda non possiede più.
+    if (gone.detached && gone.connId !== null) {
+      const kind: DetachedKind = gone.kind === 'rdp' ? 'rdp' : ((sessionProtocol(gone.target.sessionId) as DetachedKind) ?? 'sftp')
+      void closeConnection(kind, gone.connId).catch(() => {})
+      void invoke('window_finish', { label: gone.detached, action: 'none', info: null }).catch(() => {})
+      handoff.delete(gone.connId)
+    }
     tabs.splice(i, 1)
     if (activeKey === key) activeKey = tabs[Math.min(i, tabs.length - 1)]?.key ?? null
   }
@@ -406,15 +501,22 @@
     </div>
     {#if notice}<div class="notice">{notice}</div>{/if}
 
-    <div class="tabs" role="tablist">
+    <div class="tabs" role="tablist" bind:this={tabsEl}>
       {#each tabs as tab (tab.key)}
         <div
           class="tab"
           class:on={tab.key === activeKey}
           style:border-top-color={sessionUi(tab.target.sessionId)?.color ?? undefined}
           role="presentation"
+          oncontextmenu={(e) => {
+            e.preventDefault()
+            tabMenu = { x: e.clientX, y: e.clientY, tab }
+          }}
         >
-          <button role="tab" aria-selected={tab.key === activeKey} title={tab.kind === 'editor' ? tab.editPath : undefined} onclick={() => (activeKey = tab.key)}>{tab.kind === 'editor' ? '✎ ' : tab.kind === 'sftp' ? '⇄ ' : tab.kind === 'rdp' || tab.kind === 'vnc' ? '🖵 ' : ''}{tab.title}{tab.dirty ? ' ●' : ''}</button>
+          <button role="tab" aria-selected={tab.key === activeKey} title={tab.kind === 'editor' ? tab.editPath : undefined} onclick={() => (activeKey = tab.key)} onpointerdown={(e) => tabPointerDown(e, tab)} onpointermove={tabPointerMove} onpointerup={tabPointerUp}>{tab.kind === 'editor' ? '✎ ' : tab.kind === 'sftp' ? '⇄ ' : tab.kind === 'rdp' || tab.kind === 'vnc' ? '🖵 ' : ''}{tab.title}{tab.dirty ? ' ●' : ''}{tab.detached ? ' ⧉' : ''}</button>
+          {#if detachKind(tab)}
+            <button class="x" aria-label={t('detachTab')} title={t('detachTab')} onclick={() => detach(tab)}>⧉</button>
+          {/if}
           <button class="x" aria-label={t('closeTab')} title={t('closeTab')} onclick={() => requestClose(tab.key)}>×</button>
         </div>
       {/each}
@@ -422,7 +524,15 @@
 
     <div class="views">
       {#each tabs as tab (tab.key)}
-        {#if tab.kind === 'editor' && tab.connId !== null}
+        {#if tab.detached}
+          <div class="placeholder" class:hidden={tab.key !== activeKey}>
+            <p>{t('detachedPlaceholder', { name: tab.title })}</p>
+            <div class="row">
+              <button type="button" onclick={() => invoke('window_focus', { label: tab.detached })}>{t('detachFocus')}</button>
+              <button type="button" class="primary" onclick={() => redock(tab)}>{t('detachRedock')}</button>
+            </div>
+          </div>
+        {:else if tab.kind === 'editor' && tab.connId !== null}
           <EditorTab connId={tab.connId} path={tab.editPath} name={tab.title} active={tab.key === activeKey} bind:dirty={tab.dirty} />
         {:else if tab.kind === 'vnc'}
           <VncTab
@@ -439,6 +549,7 @@
             target={tab.target}
             active={tab.key === activeKey}
             shareClipboard={(nodes.find((x) => x.id === tab.target.sessionId) as Session | undefined)?.rdp.redirectClipboard ?? true}
+            attachConnId={tab.attachConn ?? undefined}
             onpincert={tab.target.sessionId ? certPinner(tab.target.sessionId) : undefined}
             savePassword={tab.target.sessionId ? passwordSaver(tab.target.sessionId) : undefined}
             bind:connId={tab.connId}
@@ -451,6 +562,7 @@
             protocol={sessionProtocol(tab.target.sessionId) === 's3' ? 's3' : sessionProtocol(tab.target.sessionId) === 'ftp' ? 'ftp' : 'sftp'}
             plainFtp={sessionProtocol(tab.target.sessionId) === 'ftp' && (nodes.find((x) => x.id === tab.target.sessionId) as Session | undefined)?.ftp.security === 'plain'}
             onpincert={tab.target.sessionId ? certPinner(tab.target.sessionId) : undefined}
+            attachConnId={tab.attachConn ?? undefined}
             startPath={sftpOptions(tab.target.sessionId)?.startPath ?? null}
             showHidden={sftpOptions(tab.target.sessionId)?.showHidden ?? false}
             sessionName={tab.title}
@@ -484,6 +596,15 @@
     <TransferBar />
   </section>
 </main>
+
+{#if tabMenu}
+  {@const target = tabMenu.tab}
+  <div class="tab-menu-backdrop" role="presentation" onclick={() => (tabMenu = null)} oncontextmenu={(e) => { e.preventDefault(); tabMenu = null }}></div>
+  <div class="tab-menu" role="menu" use:placeMenu={{ x: tabMenu.x, y: tabMenu.y }}>
+    <button role="menuitem" disabled={!detachKind(target)} onclick={() => { tabMenu = null; void detach(target) }}>{t('detachTab')}</button>
+    <button role="menuitem" onclick={() => { tabMenu = null; requestClose(target.key) }}>{t('closeTab')}</button>
+  </div>
+{/if}
 
 {#if closingEditor}
   <Modal title={t('editorCloseTitle')} onclose={() => (closingEditor = null)}>
@@ -648,6 +769,48 @@
   .views {
     flex: 1;
     min-height: 0;
+  }
+  .placeholder {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    height: 100%;
+    color: var(--fg-dim);
+  }
+  .placeholder.hidden {
+    display: none;
+  }
+  .placeholder .row {
+    display: flex;
+    gap: 8px;
+  }
+  .tab-menu-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 69;
+  }
+  .tab-menu {
+    z-index: 70;
+    min-width: 200px;
+    padding: 4px 0;
+    background: var(--bg-elev);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
+  }
+  .tab-menu button {
+    display: block;
+    width: 100%;
+    text-align: left;
+    padding: 6px 14px;
+    border: 0;
+    border-radius: 0;
+    background: none;
+  }
+  .tab-menu button:hover:not(:disabled) {
+    background: var(--hover, rgba(255, 255, 255, 0.08));
   }
   .welcome {
     padding: 24px;

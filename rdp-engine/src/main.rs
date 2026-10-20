@@ -64,6 +64,9 @@ async fn real_main() -> i32 {
                 Ok(Some(ToEngine::Input(i))) => {
                     let _ = cmd_tx.send(Command::Input(i));
                 }
+                Ok(Some(ToEngine::Repaint)) => {
+                    let _ = cmd_tx.send(Command::Repaint);
+                }
                 Ok(Some(ToEngine::Resize { width, height })) => {
                     let _ = cmd_tx.send(Command::Resize { width, height });
                 }

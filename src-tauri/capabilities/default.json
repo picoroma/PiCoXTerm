@@ -1,8 +1,8 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Capability minima per la finestra principale",
-  "windows": ["main"],
+  "description": "Capability minima per la finestra principale e per le schede staccate",
+  "windows": ["main", "detached-*"],
   "permissions": [
     "core:default",
     "clipboard-manager:allow-read-text",

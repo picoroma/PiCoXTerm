@@ -4,6 +4,7 @@
   import ConnectPrompts, { type CertRequest, type HostKeyChange, type HostKeyRequest } from './ConnectPrompts.svelte'
   import DualPane from './DualPane.svelte'
   import S3Pane from './S3Pane.svelte'
+  import { handoff } from './detach'
   import { t } from '../i18n'
   import type { SftpEntry, Target } from './types'
 
@@ -24,6 +25,7 @@
     sessionName = '',
     sessionColor = null,
     savePassword,
+    attachConnId,
     onmanagehostkeys,
     onedit,
     onexternal,
@@ -44,6 +46,8 @@
     sessionName?: string
     sessionColor?: string | null
     savePassword?: (password: string) => Promise<void>
+    /** La connessione esiste già nel backend (scheda staccata e poi riagganciata): non si riconnette. */
+    attachConnId?: number
     onmanagehostkeys?: () => void
     onedit?: (connId: number, entry: SftpEntry) => void
     onexternal?: (connId: number, entry: SftpEntry) => void
@@ -160,9 +164,16 @@
   }
 
   onMount(() => {
-    void connect()
+    if (attachConnId !== undefined) {
+      // La connessione c'è già (scheda riagganciata da una finestra staccata).
+      connId = attachConnId
+      status = 'connected'
+    } else {
+      void connect()
+    }
     return () => {
-      if (connId !== null) void invoke('ssh_close', { id: connId })
+      // Una scheda che passa a un'altra finestra non chiude la connessione.
+      if (connId !== null && !handoff.has(connId)) void invoke('ssh_close', { id: connId })
     }
   })
 </script>

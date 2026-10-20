@@ -268,6 +268,11 @@ impl RdpSession {
 }
 
 impl RdpHandle {
+    /// Chiede al motore di rimandare l'immagine intera del desktop (dopo il cambio di finestra).
+    pub fn repaint(&self) -> bool {
+        self.to_engine.send(ToEngine::Repaint).is_ok()
+    }
+
     /// Chiede al server una nuova risoluzione del desktop; la conferma arriva come `RdpEvent::Resized`.
     pub fn resize(&self, width: u16, height: u16) -> bool {
         self.to_engine

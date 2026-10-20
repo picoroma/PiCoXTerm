@@ -308,6 +308,7 @@ fn extract(
 /// Cosa si chiede al ciclo di una sessione già aperta.
 pub enum Command {
     Input(Input),
+    Repaint,
     Resize { width: u16, height: u16 },
     SetClipboard(String),
     Close,
@@ -429,6 +430,20 @@ pub async fn run(
                             }
                         }
                         break 'outer "chiusa".to_string();
+                    }
+                    Some(Command::Repaint) => {
+                        // Immagine intera del desktop (la finestra che disegnava è stata sostituita).
+                        let (w, h) = (image.width(), image.height());
+                        let _ = out.send(FromEngine::Resized { width: w, height: h }).await;
+                        let rect = ironrdp_pdu::geometry::InclusiveRectangle {
+                            left: 0,
+                            top: 0,
+                            right: w.saturating_sub(1),
+                            bottom: h.saturating_sub(1),
+                        };
+                        if let Some(ev) = extract(&image, &rect) {
+                            let _ = out.send(ev).await;
+                        }
                     }
                     Some(Command::Resize { width, height }) => {
                         match send_resize(&mut stage, &mut framed, width, height).await {
