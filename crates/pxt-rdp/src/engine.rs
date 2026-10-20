@@ -229,9 +229,11 @@ impl RdpSession {
             Ok(Some(FromEngine::Failed(f))) if f.kind == "auth" => Err(RdpError::Auth(f.message)),
             Ok(Some(FromEngine::Failed(f))) => Err(RdpError::Connect(f.message)),
             Ok(Some(FromEngine::Disconnected(r))) => Err(RdpError::Connect(r)),
-            Ok(Some(FromEngine::Update { .. } | FromEngine::ClipboardText(_))) => {
-                Err(RdpError::Connect("risposta inattesa del motore RDP".into()))
-            }
+            Ok(Some(
+                FromEngine::Update { .. }
+                | FromEngine::ClipboardText(_)
+                | FromEngine::Resized { .. },
+            )) => Err(RdpError::Connect("risposta inattesa del motore RDP".into())),
         };
         // Connessione non riuscita: il motore va chiuso.
         session_guard(&child)();
@@ -253,6 +255,11 @@ impl RdpSession {
         self.handle.send_clipboard(text)
     }
 
+    /// Chiede al server una nuova risoluzione del desktop; la conferma arriva come `RdpEvent::Resized`.
+    pub fn resize(&self, width: u16, height: u16) -> bool {
+        self.handle.resize(width, height)
+    }
+
     /// Separa la coda degli eventi dai comandi: gli eventi possono andare a un task che li gira alla
     /// scheda, mentre il resto dell'app tiene l'`RdpHandle` per input e chiusura.
     pub fn split(self) -> (mpsc::Receiver<RdpEvent>, RdpHandle) {
@@ -261,6 +268,13 @@ impl RdpSession {
 }
 
 impl RdpHandle {
+    /// Chiede al server una nuova risoluzione del desktop; la conferma arriva come `RdpEvent::Resized`.
+    pub fn resize(&self, width: u16, height: u16) -> bool {
+        self.to_engine
+            .send(ToEngine::Resize { width, height })
+            .is_ok()
+    }
+
     /// Rende incollabile nel server il testo appena copiato sul computer.
     pub fn send_clipboard(&self, text: String) -> bool {
         self.to_engine.send(ToEngine::SetClipboard(text)).is_ok()

@@ -263,7 +263,10 @@ async fn the_keyboard_layout_decides_whether_a_typed_password_is_right() {
 
 /// Esegue un comando nel container come `pxtuser`, sul display della sessione grafica.
 fn in_session(script: &str) -> String {
-    let full = format!("export DISPLAY=$(ls /tmp/.X11-unix | head -1 | sed 's/X/:/'); {script}");
+    // Il display è quello dell'Xorg in esecuzione (i socket di vecchie sessioni possono restare in /tmp).
+    let full = format!(
+        "export DISPLAY=$(ps -eo args | sed -n 's/.*Xorg \\(:[0-9]*\\).*/\\1/p' | head -1); {script}"
+    );
     let out = std::process::Command::new("docker")
         .args(["exec", "-u", "pxtuser", "pxt-test-rdp", "sh", "-c", &full])
         .output()
@@ -332,5 +335,76 @@ async fn text_clipboard_works_in_both_directions() {
         }
     }
     assert_eq!(got.as_deref(), Some("dal server è ✓"));
+    s.close();
+}
+
+#[tokio::test]
+#[ignore = "richiede il servizio rdp di testenv e il motore compilato"]
+async fn the_server_follows_a_resolution_change() {
+    use_dev_engine();
+    let fp = fingerprint().await;
+    let mut p = params(Some(fp));
+    p.keyboard_layout = 0x410;
+    let mut s = RdpSession::connect(p).await.expect("connessione");
+    assert_eq!((s.width, s.height), (1024, 768));
+    let _ = drain(&mut s, Duration::from_secs(2)).await;
+    for sc in IT_PASSWORD {
+        assert!(s.send(RdpInput::Key {
+            scancode: sc,
+            pressed: true
+        }));
+        assert!(s.send(RdpInput::Key {
+            scancode: sc,
+            pressed: false
+        }));
+    }
+    assert!(s.send(RdpInput::Key {
+        scancode: 0x1C,
+        pressed: true
+    }));
+    assert!(s.send(RdpInput::Key {
+        scancode: 0x1C,
+        pressed: false
+    }));
+    // Il desktop e il canale del display ci mettono un po' a partire.
+    let _ = drain(&mut s, Duration::from_secs(12)).await;
+
+    // Si chiede una risoluzione diversa: arriva la conferma, poi la grafica nuova.
+    assert!(s.resize(1280, 720));
+    let end = Instant::now() + Duration::from_secs(15);
+    let mut resized = None;
+    let mut updates_after = 0;
+    let mut covers_new_size = false;
+    while Instant::now() < end {
+        match tokio::time::timeout(Duration::from_secs(1), s.events.recv()).await {
+            Ok(Some(RdpEvent::Resized { width, height })) => resized = Some((width, height)),
+            Ok(Some(RdpEvent::Update {
+                x,
+                y,
+                width,
+                height,
+                ..
+            })) if resized.is_some() => {
+                updates_after += 1;
+                covers_new_size |= u32::from(x) + u32::from(width) > 1100
+                    || u32::from(y) + u32::from(height) > 700;
+            }
+            Ok(Some(RdpEvent::Disconnected(r))) => panic!("disconnesso: {r}"),
+            _ => {}
+        }
+        if resized.is_some() && updates_after >= 3 && covers_new_size {
+            break;
+        }
+    }
+    assert_eq!(
+        resized,
+        Some((1280, 720)),
+        "il server non ha cambiato risoluzione"
+    );
+    assert!(updates_after >= 1, "nessuna grafica dopo il cambio");
+    // Il mouse continua a funzionare dopo la riattivazione: la sessione è viva.
+    assert!(s.send(RdpInput::MouseMove { x: 1000, y: 600 }));
+    let (_, ended) = drain(&mut s, Duration::from_secs(2)).await;
+    assert!(ended.is_none(), "la sessione è finita: {ended:?}");
     s.close();
 }

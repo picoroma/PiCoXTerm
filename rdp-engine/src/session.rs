@@ -7,7 +7,14 @@ use std::time::Duration;
 
 use ironrdp::cliprdr::pdu::{ClipboardFormat, ClipboardFormatId, OwnedFormatDataResponse};
 use ironrdp::cliprdr::{Client, Cliprdr, CliprdrSvcMessages};
+use ironrdp::connector::connection_activation::{
+    ConnectionActivationFactory, ConnectionActivationState,
+};
 use ironrdp::connector::{self, ClientConnector, Credentials, DesktopSize};
+use ironrdp::core::WriteBuf;
+use ironrdp::displaycontrol::client::DisplayControlClient;
+use ironrdp::displaycontrol::pdu::MonitorLayoutEntry;
+use ironrdp::dvc::DrdynvcClient;
 use ironrdp::input::{Database, MouseButton, MousePosition, Operation, Scancode, WheelRotations};
 use ironrdp::pdu::gcc::KeyboardType;
 use ironrdp::pdu::rdp::capability_sets::MajorPlatformType;
@@ -16,7 +23,8 @@ use ironrdp::session::{ActiveStage, ActiveStageBuilder, ActiveStageOutput};
 use ironrdp_pdu::rdp::client_info::{PerformanceFlags, TimezoneInfo};
 use ironrdp_tokio::reqwest::ReqwestNetworkClient;
 use ironrdp_tokio::{
-    connect_begin, connect_finalize, mark_as_upgraded, FramedWrite as _, TokioFramed,
+    connect_begin, connect_finalize, mark_as_upgraded, single_sequence_step, FramedWrite as _,
+    TokioFramed,
 };
 use pxt_rdp_proto::{Connect, FromEngine, Input};
 use rustls::pki_types::ServerName;
@@ -52,6 +60,8 @@ pub struct Established {
     image: DecodedImage,
     /// Eventi degli appunti condivisi (se attivi per questa sessione).
     clip_rx: Option<mpsc::UnboundedReceiver<ClipEvent>>,
+    /// Per rifare l'attivazione quando il server cambia la risoluzione.
+    activation: ConnectionActivationFactory,
 }
 
 fn config(p: &Connect, width: u16, height: u16) -> connector::Config {
@@ -76,7 +86,8 @@ fn config(p: &Connect, width: u16, height: u16) -> connector::Config {
             codecs: ironrdp_pdu::rdp::capability_sets::client_codecs_capabilities(&[])
                 .unwrap_or_default(),
         }),
-        client_build: 0,
+        // Alcuni server (xrdp) non ridimensionano per client con build <= 419: si dichiara una build moderna.
+        client_build: 19041,
         client_name: "PiCoXterm".into(),
         client_dir: "C:\\Windows\\System32\\mstscax.dll".into(),
         platform: MajorPlatformType::WINDOWS,
@@ -142,6 +153,10 @@ async fn connect_inner(params: Connect, seen: SeenCert) -> Result<Established, C
         .map_err(|e| ConnectError::Connect(text(&e)))?;
     let mut framed = TokioFramed::new(tcp);
     let mut connector = ClientConnector::new(config(&params, width, height), client_addr);
+    // Canale dinamico con il controllo del display: serve a cambiare la risoluzione del desktop.
+    connector.attach_static_channel(
+        DrdynvcClient::new().with_dynamic_channel(DisplayControlClient::new(|_| Ok(Vec::new()))),
+    );
     let mut clip_rx = None;
     if params.clipboard {
         let (tx, rx) = mpsc::unbounded_channel();
@@ -198,6 +213,7 @@ async fn connect_inner(params: Connect, seen: SeenCert) -> Result<Established, C
     .await
     .map_err(|e| ConnectError::Auth(text(&e)))?;
 
+    let activation = result.activation_factory.clone();
     let (w, h) = (result.desktop_size.width, result.desktop_size.height);
     let image = DecodedImage::new(
         ironrdp_graphics::image_processing::PixelFormat::RgbA32,
@@ -222,6 +238,7 @@ async fn connect_inner(params: Connect, seen: SeenCert) -> Result<Established, C
         stage,
         image,
         clip_rx,
+        activation,
     })
 }
 
@@ -291,6 +308,7 @@ fn extract(
 /// Cosa si chiede al ciclo di una sessione già aperta.
 pub enum Command {
     Input(Input),
+    Resize { width: u16, height: u16 },
     SetClipboard(String),
     Close,
 }
@@ -307,9 +325,12 @@ pub async fn run(
         mut stage,
         mut image,
         mut clip_rx,
+        activation,
         ..
     } = est;
     let mut clip = ClipState::default();
+    // Nuova risoluzione chiesta ma non ancora inviabile (il canale del display non è ancora pronto).
+    let mut pending_resize: Option<(u16, u16)> = None;
     let mut db = Database::new();
     'outer: loop {
         tokio::select! {
@@ -318,9 +339,21 @@ pub async fn run(
                     Ok(p) => p,
                     Err(e) => break 'outer format!("connessione interrotta: {e}"),
                 };
-                let outputs = match stage.process(&mut image, action, &payload) {
-                    Ok(o) => o,
-                    Err(e) => break 'outer format!("errore del protocollo: {e}"),
+                if std::env::var_os("PXT_RDP_DEBUG").is_some() {
+                    eprintln!("pdu {action:?} {} byte", payload.len());
+                    if payload.len() < 40 {
+                        eprintln!("  dati: {payload:02x?}");
+                    }
+                }
+                // xrdp manda un DeactivateAll fatto della sola intestazione (6 byte, senza share id): IronRDP
+                // non lo decodifica, ma il significato è chiaro e basta rifare l'attivazione.
+                let outputs = if action == ironrdp_pdu::Action::X224 && is_bare_deactivate_all(&payload) {
+                    vec![ActiveStageOutput::DeactivateAll]
+                } else {
+                    match stage.process(&mut image, action, &payload) {
+                        Ok(o) => o,
+                        Err(e) => break 'outer format!("errore del protocollo: {e}"),
+                    }
                 };
                 for o in outputs {
                     match o {
@@ -338,7 +371,24 @@ pub async fn run(
                         }
                         ActiveStageOutput::Terminate(r) => break 'outer r.description(),
                         ActiveStageOutput::DeactivateAll => {
-                            break 'outer "il server ha cambiato la risoluzione: non ancora gestito".into();
+                            // Il server rifà la negoziazione (di solito per una nuova risoluzione).
+                            if std::env::var_os("PXT_RDP_DEBUG").is_some() {
+                                eprintln!("riattivazione: DeactivateAll ricevuto");
+                            }
+                            match reactivate(&activation, &mut framed, &mut stage).await {
+                                Ok((w, h)) => {
+                                    if std::env::var_os("PXT_RDP_DEBUG").is_some() {
+                                        eprintln!("riattivazione: finita, desktop {w}x{h}");
+                                    }
+                                    image = DecodedImage::new(
+                                        ironrdp_graphics::image_processing::PixelFormat::RgbA32,
+                                        w,
+                                        h,
+                                    );
+                                    let _ = out.send(FromEngine::Resized { width: w, height: h }).await;
+                                }
+                                Err(e) => break 'outer format!("riattivazione: {e}"),
+                            }
                         }
                         _ => {}
                     }
@@ -359,6 +409,15 @@ pub async fn run(
                     }
                 }
             }
+            _ = tokio::time::sleep(std::time::Duration::from_millis(250)), if pending_resize.is_some() => {
+                if let Some((w, h)) = pending_resize {
+                    match send_resize(&mut stage, &mut framed, w, h).await {
+                        Ok(true) => pending_resize = None,
+                        Ok(false) => {}
+                        Err(e) => break 'outer e,
+                    }
+                }
+            }
             cmd = commands.recv() => {
                 match cmd {
                     None | Some(Command::Close) => {
@@ -370,6 +429,13 @@ pub async fn run(
                             }
                         }
                         break 'outer "chiusa".to_string();
+                    }
+                    Some(Command::Resize { width, height }) => {
+                        match send_resize(&mut stage, &mut framed, width, height).await {
+                            Ok(true) => pending_resize = None,
+                            Ok(false) => pending_resize = Some((width, height)),
+                            Err(e) => break 'outer e,
+                        }
                     }
                     Some(Command::SetClipboard(t)) => {
                         if t.len() <= MAX_TEXT_BYTES {
@@ -508,5 +574,115 @@ async fn handle_clip(
                 Err(_) => Ok(()),
             }
         }
+    }
+}
+
+/// Chiede al server una nuova risoluzione. `Ok(false)` se il canale del display non è ancora pronto.
+async fn send_resize(
+    stage: &mut ActiveStage,
+    framed: &mut TlsFramed,
+    width: u16,
+    height: u16,
+) -> Result<bool, String> {
+    let (w, h) = MonitorLayoutEntry::adjust_display_size(u32::from(width), u32::from(height));
+    let encoded = stage.encode_resize(w, h, Some(100), None);
+    if std::env::var_os("PXT_RDP_DEBUG").is_some() {
+        eprintln!(
+            "resize {w}x{h}: {}",
+            match &encoded {
+                None => "canale del display non pronto",
+                Some(Ok(_)) => "inviato",
+                Some(Err(_)) => "errore",
+            }
+        );
+    }
+    match encoded {
+        None => Ok(false),
+        Some(Err(e)) => Err(format!("ridimensionamento: {e}")),
+        Some(Ok(frame)) => {
+            framed
+                .write_all(&frame)
+                .await
+                .map_err(|e| format!("scrittura: {e}"))?;
+            Ok(true)
+        }
+    }
+}
+
+/// Sequenza di disattivazione-riattivazione (il server ha cambiato risoluzione): rifà capacità e
+/// finalizzazione, poi riallinea il resto della sessione. Restituisce la nuova dimensione del desktop.
+async fn reactivate(
+    factory: &ConnectionActivationFactory,
+    framed: &mut TlsFramed,
+    stage: &mut ActiveStage,
+) -> Result<(u16, u16), String> {
+    let mut sequence = factory.create();
+    let mut buf = WriteBuf::new();
+    loop {
+        single_sequence_step(framed, &mut sequence, &mut buf)
+            .await
+            .map_err(|e| e.to_string())?;
+        if let ConnectionActivationState::Finalized {
+            desktop_size,
+            share_id,
+            enable_server_pointer,
+            pointer_software_rendering,
+        } = sequence.connection_activation_state()
+        {
+            stage.set_fastpath_processor(
+                ironrdp::session::fast_path::ProcessorBuilder {
+                    io_channel_id: factory.io_channel_id(),
+                    user_channel_id: factory.user_channel_id(),
+                    share_id,
+                    enable_server_pointer,
+                    pointer_software_rendering,
+                    bulk_decompressor: None,
+                }
+                .build(),
+            );
+            stage.set_share_id(share_id);
+            stage.set_enable_server_pointer(enable_server_pointer);
+            return Ok((desktop_size.width, desktop_size.height));
+        }
+    }
+}
+
+/// `true` se è un PDU Deactivate All ridotto alla sola intestazione Share Control (6 byte), come lo manda xrdp.
+fn is_bare_deactivate_all(frame: &[u8]) -> bool {
+    let Ok(ctx) = ironrdp_pdu::mcs::decode_send_data_indication(frame) else {
+        return false;
+    };
+    let d = ctx.user_data;
+    // totalLength = 6, pduType = DeactivateAll (6, nei 4 bit bassi), poi solo la sorgente.
+    d.len() == 6
+        && u16::from_le_bytes([d[0], d[1]]) == 6
+        && (u16::from_le_bytes([d[2], d[3]]) & 0x000F) == 6
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Il PDU osservato da xrdp 0.9.24: TPKT, X.224, MCS SendDataIndication, intestazione Share Control di 6 byte.
+    const XRDP_DEACTIVATE_ALL: [u8; 20] = [
+        0x03, 0x00, 0x00, 0x14, 0x02, 0xf0, 0x80, 0x68, 0x00, 0x05, 0x03, 0xeb, 0x70, 0x06, 0x06,
+        0x00, 0x16, 0x00, 0xee, 0x03,
+    ];
+
+    #[test]
+    fn the_short_deactivate_all_sent_by_xrdp_is_recognised() {
+        assert!(is_bare_deactivate_all(&XRDP_DEACTIVATE_ALL));
+    }
+
+    #[test]
+    fn other_frames_are_not_mistaken_for_it() {
+        assert!(!is_bare_deactivate_all(&[]));
+        assert!(!is_bare_deactivate_all(&[
+            0x03, 0x00, 0x00, 0x07, 0x02, 0xf0, 0x80
+        ]));
+        // Stessa struttura ma di un altro tipo di PDU (dati, 7).
+        let mut data = XRDP_DEACTIVATE_ALL;
+        data[16] = 0x17;
+        assert!(!is_bare_deactivate_all(&data));
     }
 }

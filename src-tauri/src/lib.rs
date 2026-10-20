@@ -1509,6 +1509,7 @@ async fn rdp_test(state: &Arc<AppState>, session: &Session) -> TestResult {
 const RDP_MSG_UPDATE: u8 = 1;
 const RDP_MSG_DISCONNECTED: u8 = 2;
 const RDP_MSG_CLIPBOARD: u8 = 3;
+const RDP_MSG_RESIZED: u8 = 4;
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1616,6 +1617,12 @@ async fn rdp_connect(
                             b.extend_from_slice(reason.as_bytes());
                             (b, true)
                         }
+                        pxt_rdp::RdpEvent::Resized { width, height } => {
+                            let mut b = vec![RDP_MSG_RESIZED];
+                            b.extend_from_slice(&width.to_le_bytes());
+                            b.extend_from_slice(&height.to_le_bytes());
+                            (b, false)
+                        }
                         pxt_rdp::RdpEvent::ClipboardText(text) => {
                             let mut b = vec![RDP_MSG_CLIPBOARD];
                             b.extend_from_slice(text.as_bytes());
@@ -1687,6 +1694,16 @@ fn rdp_clipboard_set(state: Shared<'_>, id: u64, text: String) -> Result<(), Str
     let handle = state.rdp.lock().unwrap().get(&id).cloned();
     match handle {
         Some(h) if h.send_clipboard(text) => Ok(()),
+        _ => Err("sessione RDP chiusa".into()),
+    }
+}
+
+/// Chiede una nuova risoluzione del desktop remoto (si adatta all'area della scheda).
+#[tauri::command]
+fn rdp_resize(state: Shared<'_>, id: u64, width: u16, height: u16) -> Result<(), String> {
+    let handle = state.rdp.lock().unwrap().get(&id).cloned();
+    match handle {
+        Some(h) if h.resize(width, height) => Ok(()),
         _ => Err("sessione RDP chiusa".into()),
     }
 }
@@ -2859,6 +2876,7 @@ pub fn run() {
             rdp_engine_available,
             rdp_input,
             rdp_clipboard_set,
+            rdp_resize,
             rdp_close,
             s3_object_info,
             s3_set_headers,

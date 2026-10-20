@@ -42,6 +42,8 @@
   let lastPassword: string | undefined
   let desktop = $state({ width: 0, height: 0 })
   let fit = $state(true)
+  /** La risoluzione del desktop segue la dimensione della scheda (il server ricalcola il layout). */
+  let autoResize = $state(true)
   /** Area disponibile nella scheda: il desktop si adatta (anche ingrandendo) quando la finestra cambia. */
   let area = $state({ width: 0, height: 0 })
   const shown = $derived.by(() => {
@@ -80,6 +82,17 @@
     onFrame.onmessage = (buf) => {
       const f = parseFrame(buf)
       if (!f) return
+      if (f.kind === 'resized') {
+        // Nuova risoluzione confermata dal server: il canvas cambia dimensione (e si svuota); il server ridisegna.
+        desktop = { width: f.width, height: f.height }
+        if (canvas) {
+          canvas.width = f.width
+          canvas.height = f.height
+          ctx = canvas.getContext('2d', { alpha: false })
+          ctx?.fillRect(0, 0, f.width, f.height)
+        }
+        return
+      }
       if (f.kind === 'clipboard') {
         // Testo copiato nel server: finisce negli appunti del computer (e non si rimanda indietro).
         lastClipboard = f.text
@@ -160,6 +173,30 @@
     status = 'closed'
     if (id !== null) await invoke('rdp_close', { id })
   }
+
+  // ---- Risoluzione: segue la scheda, con una pausa per non seguire ogni pixel del trascinamento ----
+  let resizeTimer: ReturnType<typeof setTimeout> | undefined
+  let lastRequested = { width: 0, height: 0 }
+  function requestSize() {
+    const id = connId
+    if (id === null || !autoResize) return
+    const { width, height } = areaSize()
+    // Si chiede solo se la differenza è sensibile: il server ridisegna tutto a ogni cambio.
+    if (Math.abs(width - desktop.width) < 16 && Math.abs(height - desktop.height) < 16) return
+    if (width === lastRequested.width && height === lastRequested.height) return
+    lastRequested = { width, height }
+    void invoke('rdp_resize', { id, width, height }).catch(() => {})
+  }
+  $effect(() => {
+    // Si ricalcola quando cambia l'area della scheda (o si riattiva la risoluzione automatica).
+    void area.width
+    void area.height
+    void autoResize
+    if (status !== 'connected') return
+    clearTimeout(resizeTimer)
+    resizeTimer = setTimeout(requestSize, 400)
+    return () => clearTimeout(resizeTimer)
+  })
 
   // ---- Appunti: solo testo ----
   /** Ultimo testo scambiato (in un verso o nell'altro): evita di rimandarlo indietro. */
@@ -298,6 +335,7 @@
     {#if status === 'connected'}
       <span class="dim">{t('rdpConnected')}</span>
       <button type="button" onclick={sendCtrlAltDel} title={t('rdpCtrlAltDel')}>Ctrl+Alt+Canc</button>
+      <button type="button" class:on={autoResize} aria-pressed={autoResize} title={t('rdpAutoResizeHint')} onclick={() => (autoResize = !autoResize)}>{t('rdpAutoResize')}</button>
       <button type="button" class:on={fit} aria-pressed={fit} onclick={() => (fit = !fit)}>{t('rdpFit')}</button>
       <button type="button" onclick={toggleFullscreen}>{t('rdpFullscreen')}</button>
       <button type="button" onclick={disconnect}>{t('disconnect')}</button>

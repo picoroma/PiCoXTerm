@@ -16,7 +16,7 @@ authors = ["PiCo"]
 
 [dependencies]
 pxt-rdp-proto = { path = "../crates/pxt-rdp-proto" }
-ironrdp = { version = "0.17", features = ["connector", "session", "graphics", "input", "cliprdr"] }
+ironrdp = { version = "0.17", features = ["connector", "session", "graphics", "input", "cliprdr", "dvc", "displaycontrol"] }
 ironrdp-tokio = { version = "0.10", features = ["reqwest-rustls-ring"] }
 ironrdp-pdu = "0.9"
 ironrdp-graphics = "0.9"

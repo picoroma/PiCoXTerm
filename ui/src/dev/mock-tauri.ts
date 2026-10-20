@@ -217,12 +217,25 @@ const handlers: Record<string, (args: any) => unknown> = {
       emit(onFrame, frame(40, 40, 260, 70, () => [235, 235, 235]))
     }, 50)
     ;(window as any).__rdpRemoteCopy = (text: string) => emit(onFrame, Array.from([3, ...new TextEncoder().encode(text)]))
+    // Il "server" conferma una nuova risoluzione e ridisegna tutto con quella dimensione.
+    ;(window as any).__rdpResizeReply = (nw: number, nh: number) => {
+      const m = new Uint8Array(5)
+      m[0] = 4
+      new DataView(m.buffer).setUint16(1, nw, true)
+      new DataView(m.buffer).setUint16(3, nh, true)
+      emit(onFrame, Array.from(m))
+      emit(onFrame, frame(0, 0, nw, nh, (px, py) => [200, Math.round((px / nw) * 90), 60 + Math.round((py / nh) * 100)]))
+    }
     ;(window as any).__rdpMark = (x: number, y: number) => emit(onFrame, frame(x, y, 24, 24, () => [220, 40, 40]))
     ;(window as any).__rdpEnd = (reason: string) => {
       const enc = new TextEncoder().encode(reason)
       emit(onFrame, Array.from([2, ...enc]))
     }
     return { id, width: w, height: h }
+  },
+  rdp_resize: ({ width, height }) => {
+    ;((window as any).__rdpResizes ??= []).push({ width, height })
+    ;(window as any).__rdpResizeReply?.(width, height)
   },
   rdp_clipboard_set: ({ text }) => {
     ;((window as any).__rdpClipSent ??= []).push(text)

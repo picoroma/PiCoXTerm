@@ -64,6 +64,11 @@ pub enum ToEngine {
     Input(Input),
     /// Testo appena copiato sul computer, da rendere incollabile nel server.
     SetClipboard(String),
+    /// Chiede al server una nuova risoluzione del desktop (si adatta all'area della scheda).
+    Resize {
+        width: u16,
+        height: u16,
+    },
     Close,
 }
 
@@ -105,21 +110,35 @@ pub enum FromEngine {
     Disconnected(String),
     /// Testo copiato sul server, da mettere negli appunti del computer.
     ClipboardText(String),
+    /// Il server ha cambiato la risoluzione del desktop: i pixel che seguono hanno queste dimensioni.
+    Resized {
+        width: u16,
+        height: u16,
+    },
 }
 
 const T_CONNECT: u8 = 0x01;
 const T_INPUT: u8 = 0x02;
 const T_CLOSE: u8 = 0x03;
 const T_SET_CLIPBOARD: u8 = 0x04;
+const T_RESIZE: u8 = 0x05;
 const T_CONNECTED: u8 = 0x10;
 const T_CERT: u8 = 0x11;
 const T_FAILED: u8 = 0x12;
 const T_UPDATE: u8 = 0x20;
 const T_DISCONNECTED: u8 = 0x21;
 const T_CLIPBOARD_TEXT: u8 = 0x22;
+const T_RESIZED: u8 = 0x23;
 
 fn bad(msg: &str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, msg.to_string())
+}
+
+fn two_u16(b: &[u8]) -> io::Result<(u16, u16)> {
+    match b {
+        [a, b2, c, d] => Ok((u16::from_le_bytes([*a, *b2]), u16::from_le_bytes([*c, *d]))),
+        _ => Err(bad("dimensioni troncate")),
+    }
 }
 
 fn json<T: Serialize>(v: &T) -> io::Result<Vec<u8>> {
@@ -146,6 +165,12 @@ pub fn write_to_engine(out: &mut impl Write, m: &ToEngine) -> io::Result<()> {
         ToEngine::Connect(c) => put(out, T_CONNECT, &json(c)?),
         ToEngine::Input(i) => put(out, T_INPUT, &json(i)?),
         ToEngine::SetClipboard(t) => put(out, T_SET_CLIPBOARD, t.as_bytes()),
+        ToEngine::Resize { width, height } => {
+            let mut b = [0u8; 4];
+            b[..2].copy_from_slice(&width.to_le_bytes());
+            b[2..].copy_from_slice(&height.to_le_bytes());
+            put(out, T_RESIZE, &b)
+        }
         ToEngine::Close => put(out, T_CLOSE, &[]),
     }
 }
@@ -171,6 +196,12 @@ pub fn write_from_engine(out: &mut impl Write, m: &FromEngine) -> io::Result<()>
         }
         FromEngine::Disconnected(r) => put(out, T_DISCONNECTED, r.as_bytes()),
         FromEngine::ClipboardText(t) => put(out, T_CLIPBOARD_TEXT, t.as_bytes()),
+        FromEngine::Resized { width, height } => {
+            let mut b = [0u8; 4];
+            b[..2].copy_from_slice(&width.to_le_bytes());
+            b[2..].copy_from_slice(&height.to_le_bytes());
+            put(out, T_RESIZED, &b)
+        }
     }
 }
 
@@ -202,6 +233,10 @@ pub fn read_to_engine(input: &mut impl Read) -> io::Result<Option<ToEngine>> {
         T_INPUT => ToEngine::Input(from_json(&body)?),
         T_CLOSE => ToEngine::Close,
         T_SET_CLIPBOARD => ToEngine::SetClipboard(String::from_utf8_lossy(&body).into_owned()),
+        T_RESIZE => {
+            let (width, height) = two_u16(&body)?;
+            ToEngine::Resize { width, height }
+        }
         _ => return Err(bad("tipo di messaggio sconosciuto")),
     }))
 }
@@ -233,6 +268,10 @@ pub fn read_from_engine(input: &mut impl Read) -> io::Result<Option<FromEngine>>
         }
         T_DISCONNECTED => FromEngine::Disconnected(String::from_utf8_lossy(&body).into_owned()),
         T_CLIPBOARD_TEXT => FromEngine::ClipboardText(String::from_utf8_lossy(&body).into_owned()),
+        T_RESIZED => {
+            let (width, height) = two_u16(&body)?;
+            FromEngine::Resized { width, height }
+        }
         _ => return Err(bad("tipo di messaggio sconosciuto")),
     }))
 }
@@ -377,6 +416,45 @@ mod tests {
             FromEngine::ClipboardText(t) => assert_eq!(t, "dal server\nriga 2"),
             m => panic!("{m:?}"),
         }
+    }
+
+    #[test]
+    fn resize_messages_roundtrip() {
+        let mut buf = Vec::new();
+        write_to_engine(
+            &mut buf,
+            &ToEngine::Resize {
+                width: 1600,
+                height: 900,
+            },
+        )
+        .unwrap();
+        write_from_engine(
+            &mut buf,
+            &FromEngine::Resized {
+                width: 1280,
+                height: 720,
+            },
+        )
+        .unwrap();
+        let mut r = buf.as_slice();
+        assert!(matches!(
+            read_to_engine(&mut r).unwrap().unwrap(),
+            ToEngine::Resize {
+                width: 1600,
+                height: 900
+            }
+        ));
+        assert!(matches!(
+            read_from_engine(&mut r).unwrap().unwrap(),
+            FromEngine::Resized {
+                width: 1280,
+                height: 720
+            }
+        ));
+        let mut short = Vec::new();
+        put(&mut short, T_RESIZE, &[1, 2, 3]).unwrap();
+        assert!(read_to_engine(&mut short.as_slice()).is_err());
     }
 
     #[test]
