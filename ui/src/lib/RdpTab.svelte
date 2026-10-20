@@ -38,6 +38,13 @@
   let lastPassword: string | undefined
   let desktop = $state({ width: 0, height: 0 })
   let fit = $state(true)
+  /** Area disponibile nella scheda: il desktop si adatta (anche ingrandendo) quando la finestra cambia. */
+  let area = $state({ width: 0, height: 0 })
+  const shown = $derived.by(() => {
+    if (!fit || !desktop.width || !area.width || !area.height) return null
+    const scale = Math.min(area.width / desktop.width, area.height / desktop.height)
+    return { width: Math.max(1, Math.floor(desktop.width * scale)), height: Math.max(1, Math.floor(desktop.height * scale)) }
+  })
   let ctx: CanvasRenderingContext2D | null = null
   /** Immagini arrivate prima che il canvas fosse pronto: si disegnano appena possibile. */
   let early: RdpFrame[] = []
@@ -237,8 +244,16 @@
   }
 
   onMount(() => {
+    const ro = new ResizeObserver(() => {
+      if (wrap) area = { width: wrap.clientWidth, height: wrap.clientHeight }
+    })
+    if (wrap) {
+      ro.observe(wrap)
+      area = { width: wrap.clientWidth, height: wrap.clientHeight }
+    }
     void connect()
     return () => {
+      ro.disconnect()
       if (connId !== null) void invoke('rdp_close', { id: connId })
     }
   })
@@ -271,9 +286,9 @@
       <canvas
         bind:this={canvas}
         tabindex="0"
-        class:fit
         class:hidden={status !== 'connected'}
-        style:aspect-ratio={desktop.width && desktop.height ? `${desktop.width} / ${desktop.height}` : undefined}
+        style:width={shown ? `${shown.width}px` : undefined}
+        style:height={shown ? `${shown.height}px` : undefined}
         {onpointermove}
         {onpointerdown}
         {onpointerup}
@@ -342,19 +357,16 @@
     min-height: 0;
     overflow: auto;
     display: flex;
-    align-items: center;
-    justify-content: center;
     background: #000;
   }
   canvas {
+    /* margin automatico: centrato se più piccolo dell'area, scorrevole se più grande */
+    margin: auto;
+    flex: none;
     outline: none;
     cursor: default;
     background: #000;
     image-rendering: auto;
-  }
-  canvas.fit {
-    max-width: 100%;
-    max-height: 100%;
   }
   canvas.hidden {
     display: none;
