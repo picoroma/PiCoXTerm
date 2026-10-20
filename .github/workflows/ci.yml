@@ -56,13 +56,30 @@ jobs:
       - name: Test
         run: cargo test --workspace
 
-      # Il motore RDP (D-32) è un programma a parte con il suo Cargo.lock.
-      - name: Motore RDP (formattazione, clippy, build)
+
+  # Il motore RDP (D-33) è un programma a parte con il suo Cargo.lock: ha un job suo, perché con
+  # l'app nello stesso job il disco del runner Linux si esauriva.
+  rdp-engine:
+    name: Motore RDP (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rdp-engine
+      - name: Formattazione, clippy e test
         working-directory: rdp-engine
         run: |
           cargo fmt --check
           cargo clippy --all-targets -- -D warnings
-          cargo build --release
+          cargo test
 
   security:
     name: Sicurezza delle dipendenze
