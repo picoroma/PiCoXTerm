@@ -13,7 +13,8 @@ mod credman;
 mod engine;
 
 pub use engine::{
-    engine_path, RdpEvent, RdpHandle, RdpInput, RdpSession, SessionParams, ENGINE_NAME,
+    engine_path, system_keyboard_layout, RdpEvent, RdpHandle, RdpInput, RdpSession, SessionParams,
+    ENGINE_NAME,
 };
 
 #[derive(Debug, thiserror::Error)]

@@ -69,12 +69,10 @@ services:
   # Server RDP (xrdp + Xfce) su 127.0.0.1:3390, utente fittizio, solo su loopback. Serve per provare
   # il client RDP integrato (spike M7). Mostra la schermata di login di xrdp dopo la NLA.
   rdp:
-    image: scottyhardy/docker-remote-desktop:latest
+    build: ./rdp
+    image: pxt-test-rdp:latest
     container_name: pxt-test-rdp
     hostname: pxtrdp
     shm_size: "1gb"
-    environment:
-      - USERNAME=pxtuser
-      - PASSWORD=pxtpass-1234
     ports:
       - "127.0.0.1:3390:3389"

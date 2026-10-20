@@ -24,6 +24,10 @@ pub struct Connect {
     pub width: u16,
     pub height: u16,
     pub pinned_cert: Option<String>,
+    /// Layout di tastiera del client (KLID, per esempio `0x410` italiano); 0 = quello predefinito del server.
+    /// Serve perché si mandano i tasti fisici: il server li interpreta con questo layout.
+    #[serde(default)]
+    pub keyboard_layout: u32,
 }
 
 impl std::fmt::Debug for Connect {
@@ -231,6 +235,7 @@ mod tests {
             width: 1280,
             height: 800,
             pinned_cert: None,
+            keyboard_layout: 0x410,
         }
     }
 

@@ -1575,6 +1575,7 @@ async fn rdp_connect(
         pinned_cert: request
             .pinned_cert
             .or_else(|| blank(&session.rdp.pinned_cert)),
+        keyboard_layout: pxt_rdp::system_keyboard_layout(),
     };
     match pxt_rdp::RdpSession::connect(params).await {
         Ok(s) => {

@@ -33,6 +33,7 @@ fn params(pinned: Option<String>) -> SessionParams {
         width: 1024,
         height: 768,
         pinned_cert: pinned,
+        keyboard_layout: 0x409,
     }
 }
 
@@ -189,4 +190,72 @@ async fn errors_are_clear_and_never_contain_the_password() {
         Err(RdpError::EngineMissing(_))
     ));
     std::env::remove_var("PXT_RDP_ENGINE");
+}
+
+/// Scancode dei tasti di "pxtpass-1234" su una tastiera italiana: il `-` è il tasto fisico dello `/` americano.
+const IT_PASSWORD: [u16; 12] = [
+    0x19, 0x2D, 0x14, 0x19, 0x1E, 0x1F, 0x1F, 0x35, 0x02, 0x03, 0x04, 0x05,
+];
+
+/// Scrive la password nella schermata di login di xrdp, preme Invio e riporta il totale dei pixel
+/// ridisegnati nei 20 secondi seguenti: con un login riuscito parte il desktop Xfce (da uno a molti
+/// milioni di pixel), con uno fallito xrdp ridisegna poco.
+async fn logon_with_layout(layout: u32) -> u64 {
+    let fp = fingerprint().await;
+    let mut p = params(Some(fp));
+    p.keyboard_layout = layout;
+    let mut s = RdpSession::connect(p).await.expect("connessione");
+    let _ = drain(&mut s, Duration::from_secs(2)).await;
+    for sc in IT_PASSWORD {
+        assert!(s.send(RdpInput::Key {
+            scancode: sc,
+            pressed: true
+        }));
+        assert!(s.send(RdpInput::Key {
+            scancode: sc,
+            pressed: false
+        }));
+    }
+    assert!(s.send(RdpInput::Key {
+        scancode: 0x1C,
+        pressed: true
+    }));
+    assert!(s.send(RdpInput::Key {
+        scancode: 0x1C,
+        pressed: false
+    }));
+    let end = Instant::now() + Duration::from_secs(20);
+    let mut total = 0u64;
+    while Instant::now() < end {
+        match tokio::time::timeout(Duration::from_secs(2), s.events.recv()).await {
+            Ok(Some(RdpEvent::Update { width, height, .. })) => {
+                total += u64::from(width) * u64::from(height);
+            }
+            Ok(Some(RdpEvent::Disconnected(_))) | Ok(None) => break,
+            _ => {}
+        }
+    }
+    s.close();
+    total
+}
+
+#[tokio::test]
+#[ignore = "richiede il servizio rdp di testenv e il motore compilato"]
+async fn the_keyboard_layout_decides_whether_a_typed_password_is_right() {
+    use_dev_engine();
+    // Con il layout italiano la password scritta sulla tastiera italiana è giusta: parte il desktop.
+    let italian = logon_with_layout(0x410).await;
+    // Con il layout americano lo stesso `-` diventa `/`: la password è sbagliata e il login fallisce.
+    let american = logon_with_layout(0x409).await;
+    println!("pixel ridisegnati: italiano {italian}, americano {american}");
+    // Un desktop nuovo ridisegna milioni di pixel, la riconnessione a uno già avviato meno (circa un
+    // milione); un login fallito poche centinaia di migliaia.
+    assert!(
+        italian > 700_000 && italian > american * 2,
+        "il logon con layout italiano doveva riuscire ({italian} contro {american})"
+    );
+    assert!(
+        american < 500_000,
+        "con il layout americano il logon doveva fallire ({american})"
+    );
 }

@@ -46,6 +46,10 @@ pub struct SessionParams {
     pub height: u16,
     /// Impronta SHA-256 del certificato già accettata dall'utente.
     pub pinned_cert: Option<String>,
+    /// Layout di tastiera del client (KLID, per esempio `0x410`); 0 = predefinito del server.
+    /// Con un layout diverso da quello della tastiera, i tasti fisici producono caratteri sbagliati
+    /// (su una tastiera italiana il `-` finirebbe come `/` con un server impostato sul layout US).
+    pub keyboard_layout: u32,
 }
 
 impl std::fmt::Debug for SessionParams {
@@ -56,6 +60,35 @@ impl std::fmt::Debug for SessionParams {
             .field("username", &self.username)
             .field("password", &"<nascosta>")
             .finish_non_exhaustive()
+    }
+}
+
+/// Layout di tastiera di questo computer come KLID di RDP (per esempio `0x410` per l'italiano, `0x409`
+/// per l'inglese americano), o 0 se non si riesce a saperlo. Su Windows è il layout della finestra in
+/// primo piano (la nostra, quando si apre una sessione).
+pub fn system_keyboard_layout() -> u32 {
+    #[cfg(windows)]
+    {
+        use windows::Win32::UI::Input::KeyboardAndMouse::GetKeyboardLayout;
+        use windows::Win32::UI::WindowsAndMessaging::{
+            GetForegroundWindow, GetWindowThreadProcessId,
+        };
+        // SAFETY: chiamate di sola lettura senza puntatori da mantenere.
+        unsafe {
+            let hwnd = GetForegroundWindow();
+            let thread = if hwnd.0.is_null() {
+                0
+            } else {
+                GetWindowThreadProcessId(hwnd, None)
+            };
+            let hkl = GetKeyboardLayout(thread);
+            // La parte bassa è l'identificatore della lingua, che per i layout abituali coincide con il KLID.
+            (hkl.0 as usize & 0xFFFF) as u32
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        0
     }
 }
 
@@ -160,6 +193,7 @@ impl RdpSession {
             width: params.width,
             height: params.height,
             pinned_cert: params.pinned_cert,
+            keyboard_layout: params.keyboard_layout,
         }));
 
         let first = tokio::time::timeout(REPLY_TIMEOUT, rx.recv()).await;
