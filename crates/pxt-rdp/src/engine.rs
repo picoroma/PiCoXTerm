@@ -147,6 +147,9 @@ impl RdpSession {
         let mut child = cmd
             .spawn()
             .map_err(|e| RdpError::Launch(format!("{}: {e}", path.display())))?;
+        // Se l'app muore di colpo, il sistema termina anche il motore.
+        #[cfg(windows)]
+        let _ = crate::job::assign(&child);
         let stdin = child.stdin.take().expect("stdin del motore");
         let stdout = child.stdout.take().expect("stdout del motore");
         let child = Arc::new(Mutex::new(child));

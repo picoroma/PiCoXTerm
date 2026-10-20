@@ -11,6 +11,8 @@ use std::time::Duration;
 #[cfg(windows)]
 mod credman;
 mod engine;
+#[cfg(windows)]
+mod job;
 
 pub use engine::{
     engine_path, system_keyboard_layout, RdpEvent, RdpHandle, RdpInput, RdpSession, SessionParams,
