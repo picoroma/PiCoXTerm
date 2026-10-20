@@ -1,0 +1,58 @@
+--- a/src/fast_path.rs
++++ b/src/fast_path.rs
+@@ -180,6 +180,22 @@
+     }
+ 
+     /// Process a bitmap update, shared between fast-path and slow-path pipelines.
++    /// Le righe decodificate hanno la larghezza `update.width` (spesso arrotondata a multiplo di 4),
++    /// ma il rettangolo di destinazione è più stretto: si tolgono i pixel di riempimento.
++    fn crop_rows(buf: &mut Vec<u8>, bytes_per_pixel: usize, src_width: usize, dst_width: usize) {
++        if dst_width >= src_width || src_width == 0 {
++            return;
++        }
++        let src_row = src_width * bytes_per_pixel;
++        let dst_row = dst_width * bytes_per_pixel;
++        let rows = buf.len() / src_row;
++        let mut out = Vec::with_capacity(rows * dst_row);
++        for r in 0..rows {
++            out.extend_from_slice(&buf[r * src_row..r * src_row + dst_row]);
++        }
++        *buf = out;
++    }
++
+     pub fn process_bitmap_update(
+         &mut self,
+         image: &mut DecodedImage,
+@@ -211,7 +227,10 @@
+                         usize::from(update.width),
+                         usize::from(update.height),
+                     ) {
+-                        Ok(()) => image.apply_rgb24(&buf, &update.rectangle, true)?,
++                        Ok(()) => {
++                            Self::crop_rows(&mut buf, 3, usize::from(update.width), usize::from(update.rectangle.width()));
++                            image.apply_rgb24(&buf, &update.rectangle, true)?
++                        }
+                         Err(err) => {
+                             warn!("Invalid RDP6_BITMAP_STREAM: {err}");
+                             update.rectangle.clone()
+@@ -230,6 +249,20 @@
+                         usize::from(update.height),
+                         usize::from(update.bits_per_pixel),
+                     ) {
++                        Ok(fmt) if update.width != update.rectangle.width() => {
++                            let bpp = match fmt {
++                                RlePixelFormat::Rgb16 | RlePixelFormat::Rgb15 => 2,
++                                RlePixelFormat::Rgb24 => 3,
++                                RlePixelFormat::Rgb8 => 1,
++                            };
++                            Self::crop_rows(&mut buf, bpp, usize::from(update.width), usize::from(update.rectangle.width()));
++                            match fmt {
++                                RlePixelFormat::Rgb16 => image.apply_rgb16_bitmap(&buf, &update.rectangle)?,
++                                RlePixelFormat::Rgb15 => image.apply_rgb15_bitmap(&buf, &update.rectangle)?,
++                                RlePixelFormat::Rgb24 => image.apply_bgr24_bitmap(&buf, &update.rectangle)?,
++                                RlePixelFormat::Rgb8 => image.apply_rgb8_with_palette(&buf, &update.rectangle, self.palette.colors())?,
++                            }
++                        }
+                         Ok(RlePixelFormat::Rgb16) => image.apply_rgb16_bitmap(&buf, &update.rectangle)?,
+                         Ok(RlePixelFormat::Rgb15) => image.apply_rgb15_bitmap(&buf, &update.rectangle)?,
+                         Ok(RlePixelFormat::Rgb24) => image.apply_bgr24_bitmap(&buf, &update.rectangle)?,

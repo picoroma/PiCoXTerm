@@ -34,6 +34,14 @@ docker compose up -d s3
 
 Servizio `s3` (`127.0.0.1:9000`, RustFS: MinIO non ha più immagini pubbliche). Chiave di accesso `pxtaccess`, chiave segreta `pxtsecret-1234`, indirizzi *path-style*, regione qualsiasi (`us-east-1`). Solo credenziali di prova, solo loopback. Prove automatiche: `cargo test -p pxt-fs --test s3_e2e -- --ignored --test-threads=1`.
 
+## Server RDP
+
+```
+docker compose up -d rdp
+```
+
+Servizio `rdp` (`127.0.0.1:3390`, xrdp + Xfce). Utente `pxtuser`, password `pxtpass-1234`; l'autenticazione NLA riesce e poi xrdp mostra la propria schermata di login. Solo credenziali di prova, solo loopback. Serve allo spike dell'RDP integrato (`docs/spike-m7-rdp.md`).
+
 ## Server con più shell
 
 Servizio `ssh-shells` (porta 2223): utenti `bashuser`, `zshuser`, `tcshuser`, `ashuser` (password `test`); `bashuser` può usare `sudo`.

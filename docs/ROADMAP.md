@@ -210,7 +210,7 @@ In ordine di valore stimato, da ripriorizzare dopo l'uso reale:
 
 | Voce | Note |
 |---|---|
-| RDP integrato con **IronRDP** in una scheda | Spike dedicato (prestazioni, NLA, clipboard) |
+| RDP integrato con **IronRDP** in una scheda | **Anticipato** (D-32, richiesta dell'utente 2026-10-20). Spike concluso con esito go (`docs/spike-m7-rdp.md`); sequenza: backend e grafica, scheda con mouse e tastiera, ridimensionamento e appunti, "sgancia"/schermo intero, prova su Windows Server reale |
 | Scrittura su RDM (crea/modifica voci) | Dopo la CLI ufficiale |
 | MultiExec (stesso input su più schede) | Con conferma esplicita |
 | Port forwarding locale singolo | Solo se la domanda aperta 4 delle specifiche lo conferma; controllato da policy |
