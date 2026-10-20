@@ -10,6 +10,11 @@ use std::time::Duration;
 
 #[cfg(windows)]
 mod credman;
+mod engine;
+
+pub use engine::{
+    engine_path, RdpEvent, RdpHandle, RdpInput, RdpSession, SessionParams, ENGINE_NAME,
+};
 
 #[derive(Debug, thiserror::Error)]
 pub enum RdpError {
@@ -23,6 +28,15 @@ pub enum RdpError {
     Launch(String),
     #[error("credenziali: {0}")]
     Credentials(String),
+    #[error("il motore RDP non si trova: {0}")]
+    EngineMissing(String),
+    #[error("connessione RDP: {0}")]
+    Connect(String),
+    #[error("autenticazione RDP rifiutata o fallita: {0}")]
+    Auth(String),
+    /// Il certificato del server non è verificabile e non è fissato: decide l'utente.
+    #[error("certificato del server non verificabile (SHA-256 {fingerprint})")]
+    UntrustedCertificate { fingerprint: String, changed: bool },
     #[error("{0}")]
     Io(#[from] std::io::Error),
 }

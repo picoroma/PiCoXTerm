@@ -108,6 +108,8 @@ pub struct FtpOptions {
 pub enum RdpClient {
     #[default]
     Auto,
+    /// Client RDP incorporato in una scheda (D-32). `Auto` lo usa quando può.
+    Integrated,
     Mstsc,
     WindowsApp,
     Freerdp,
@@ -135,6 +137,9 @@ pub struct RdpOptions {
     pub redirect_drives: bool,
     #[serde(default)]
     pub gateway: Option<String>,
+    /// Impronta SHA-256 del certificato del server accettata dall'utente (client integrato). Dato pubblico.
+    #[serde(default)]
+    pub pinned_cert: Option<String>,
 }
 
 fn default_true() -> bool {
@@ -152,6 +157,7 @@ impl Default for RdpOptions {
             redirect_clipboard: true,
             redirect_drives: false,
             gateway: None,
+            pinned_cert: None,
         }
     }
 }

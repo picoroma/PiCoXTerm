@@ -42,6 +42,8 @@ docker compose up -d rdp
 
 Servizio `rdp` (`127.0.0.1:3390`, xrdp + Xfce). Utente `pxtuser`, password `pxtpass-1234`; l'autenticazione NLA riesce e poi xrdp mostra la propria schermata di login. Solo credenziali di prova, solo loopback. Serve allo spike dell'RDP integrato (`docs/spike-m7-rdp.md`).
 
+Per le prove RDP serve anche il motore compilato: `cargo build --manifest-path rdp-engine/Cargo.toml`, poi `cargo test -p pxt-rdp --test rdp_e2e -- --ignored --test-threads=1`.
+
 ## Server con più shell
 
 Servizio `ssh-shells` (porta 2223): utenti `bashuser`, `zshuser`, `tcshuser`, `ashuser` (password `test`); `bashuser` può usare `sudo`.

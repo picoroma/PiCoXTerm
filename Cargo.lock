@@ -4370,8 +4370,18 @@ dependencies = [
 name = "pxt-rdp"
 version = "0.1.0-beta.2"
 dependencies = [
+ "pxt-rdp-proto",
  "thiserror 2.0.21",
+ "tokio",
  "windows",
+]
+
+[[package]]
+name = "pxt-rdp-proto"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

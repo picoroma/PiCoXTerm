@@ -1,0 +1,39 @@
+# Motore RDP di PiCoXterm (D-32): un programma a parte, con il suo Cargo.lock.
+#
+# Perché a parte: IronRDP (tramite `picky`) fissa con `=` versioni *release candidate* delle librerie
+# crittografiche RustCrypto, mentre `russh` (il nostro SSH) usa quelle finali: nello stesso Cargo.lock
+# non possono convivere. Un processo separato risolve il conflitto e isola il parser RDP dal resto
+# dell'app (un guasto o un difetto di sicurezza lì dentro non tocca sessioni, segreti e terminali).
+# Parla con l'app tramite stdin/stdout (protocollo `pxt-rdp-proto`): nessuna porta in ascolto.
+[workspace]
+
+[package]
+name = "picoxterm-rdp"
+version = "0.1.0-beta.2"
+edition = "2021"
+license = "GPL-3.0-only"
+authors = ["PiCo"]
+
+[dependencies]
+pxt-rdp-proto = { path = "../crates/pxt-rdp-proto" }
+ironrdp = { version = "0.17", features = ["connector", "session", "graphics", "input"] }
+ironrdp-tokio = { version = "0.10", features = ["reqwest-rustls-ring"] }
+ironrdp-pdu = "0.9"
+ironrdp-graphics = "0.9"
+# TLS con il backend `ring` (D-11): niente `ironrdp-tls`, che porterebbe `aws-lc` e accetterebbe
+# qualunque certificato. Il passaggio a TLS e la conferma del certificato sono nostri.
+tokio = { version = "1", features = ["rt-multi-thread", "net", "time", "sync", "macros", "io-util"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+rustls-native-certs = "0.8.5"
+x509-cert = "0.2"
+sha2 = "0.10"
+
+# Copia locale con una correzione (vedi third_party/ironrdp-session/PICOXTERM-PATCH.md).
+[patch.crates-io]
+ironrdp-session = { path = "third_party/ironrdp-session" }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+strip = true

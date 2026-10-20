@@ -1,0 +1,11 @@
+# Protocollo fra l'app e il motore RDP (`rdp-engine`, un programma a parte). Il manifesto non eredita dal
+# workspace perché il crate è usato anche dal workspace del motore.
+[package]
+name = "pxt-rdp-proto"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-only"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

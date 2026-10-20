@@ -19,6 +19,10 @@
 | Nessuna porta in ascolto | **Superata** | Solo connessione in uscita |
 | Windows Server reale (NLA con dominio, RemoteFX/EGFX) | **Da provare** | Il server di prova è Linux (xrdp). Va provato su un server Windows vero |
 
+## Conflitto di dipendenze con `russh` (trovato nel passo 1)
+
+Compilando IronRDP nello stesso workspace dell'app, `cargo` si ferma: `picky` e `sspi` fissano con `=` versioni *release candidate* delle librerie crittografiche (`curve25519-dalek =5.0.0-rc.1`, `ed25519-dalek =3.0.0-rc.1`, `aes-gcm =0.11.0-rc.4`...) e `russh` usa le versioni finali. Non possono stare nello stesso `Cargo.lock`. Soluzione: il motore RDP è un **programma a parte** con il suo `Cargo.lock` (D-33), collegato all'app da pipe.
+
 ## Il difetto trovato
 
 Nei bitmap compressi (RLE a 15/16/24 bit e RDP 6.0 a 32 bit) IronRDP 0.17 / `ironrdp-session` 0.11 decodifica le righe con la larghezza `update.width`, che è arrotondata a multiplo di 4, ma poi le copia usando la larghezza del rettangolo di destinazione. Quando le due differiscono l'immagine esce **inclinata a strisce** (vedi la prova prima della correzione).
@@ -29,7 +33,7 @@ Windows di norma usa RemoteFX/EGFX e potrebbe non incontrare mai il difetto, ma 
 
 ## Cosa manca per un client completo
 
-1. **Sessione nel backend** (`pxt-rdp`, async): connessione con credenziali dal `SecretProvider`, conferma del certificato (impronta salvata nella sessione), ciclo di lettura, riconnessione, chiusura pulita.
+1. **Sessione nel backend** (`pxt-rdp`, async): connessione con credenziali dal `SecretProvider`, conferma del certificato (impronta salvata nella sessione), ciclo di lettura, riconnessione, chiusura pulita. **Fatto** (passo 1, D-33): motore in un processo a parte, `RdpSession`, comandi `rdp_connect`/`rdp_input`/`rdp_close`, prove contro xrdp; manca la riconnessione.
 2. **Grafica verso l'interfaccia**: rettangoli modificati come byte RGBA su `tauri::ipc::Channel` (niente eventi globali), disegno su canvas.
 3. **Input**: mouse, rotella, tastiera con scancode (layout italiano, tasti morti, Ctrl+Alt+Canc, tasto Windows).
 4. **Ridimensionamento dinamico** (`ironrdp-displaycontrol`) e scala.

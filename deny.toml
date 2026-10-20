@@ -37,6 +37,8 @@ allow = [
     "0BSD",
     "MPL-2.0",
     "BSL-1.0",
+    # Licenza permissiva per dati (elenco dei certificati radice Mozilla in `webpki-roots`); solo nel motore RDP.
+    "CDLA-Permissive-2.0",
 ]
 # I crate del progetto sono GPL-3.0-only (D-30): solo loro, le dipendenze restano permissive.
 exceptions = [
@@ -45,6 +47,8 @@ exceptions = [
     { allow = ["GPL-3.0-only"], crate = "pxt-ssh" },
     { allow = ["GPL-3.0-only"], crate = "pxt-fs" },
     { allow = ["GPL-3.0-only"], crate = "pxt-rdp" },
+    { allow = ["GPL-3.0-only"], crate = "pxt-rdp-proto" },
+    { allow = ["GPL-3.0-only"], crate = "picoxterm-rdp" },
 ]
 
 [bans]

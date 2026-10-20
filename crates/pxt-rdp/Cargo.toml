@@ -6,6 +6,11 @@ license.workspace = true
 
 [dependencies]
 thiserror.workspace = true
+pxt-rdp-proto = { path = "../pxt-rdp-proto" }
+tokio = { workspace = true, features = ["sync", "time", "rt", "macros"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62", features = ["Win32_Foundation", "Win32_Security_Credentials"] }

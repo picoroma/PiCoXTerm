@@ -39,6 +39,8 @@ struct AppState {
     shells: Mutex<HashMap<u64, Shell>>,
     /// Connessioni delle sessioni SFTP: senza shell, solo il sottosistema SFTP.
     sftp_conns: Mutex<HashMap<u64, pxt_ssh::SftpConnection>>,
+    /// Sessioni RDP integrate: il lato comandi (input, chiusura) di ciascuna.
+    rdp: Mutex<HashMap<u64, Arc<pxt_rdp::RdpHandle>>>,
     /// Sessioni SFTP, una per connessione, aperte al primo uso sulla stessa connessione SSH.
     sftp: tokio::sync::Mutex<HashMap<u64, Arc<AnyFs>>>,
     /// Policy dell'organizzazione (`policy.json`, sola lettura) e l'eventuale avviso se non è valida.
@@ -72,6 +74,7 @@ impl AppState {
             data_dir,
             shells: Mutex::default(),
             sftp_conns: Mutex::default(),
+            rdp: Mutex::default(),
             sftp: tokio::sync::Mutex::default(),
             plans: Mutex::default(),
             jobs: Mutex::default(),
@@ -1393,7 +1396,7 @@ fn rdp_params(session: &Session) -> pxt_rdp::RdpParams {
         username: session.username.clone(),
         domain: blank(&o.domain),
         client: match o.client {
-            pxt_core::RdpClient::Auto => pxt_rdp::Client::Auto,
+            pxt_core::RdpClient::Auto | pxt_core::RdpClient::Integrated => pxt_rdp::Client::Auto,
             pxt_core::RdpClient::Mstsc => pxt_rdp::Client::Mstsc,
             pxt_core::RdpClient::WindowsApp => pxt_rdp::Client::WindowsApp,
             pxt_core::RdpClient::Freerdp => pxt_rdp::Client::FreeRdp,
@@ -1497,6 +1500,177 @@ async fn rdp_test(state: &Arc<AppState>, session: &Session) -> TestResult {
         }
         Ok(Err(e)) => TestResult::new("error", format!("{addr}: {e}")),
         Err(_) => TestResult::new("error", format!("{addr}: nessuna risposta entro 8 secondi")),
+    }
+}
+
+// ---- Sessioni RDP integrate (D-32): il motore `picoxterm-rdp` in un processo a parte ----
+
+/// Marcatori dei messaggi binari verso la scheda: aggiornamento di grafica o fine della sessione.
+const RDP_MSG_UPDATE: u8 = 1;
+const RDP_MSG_DISCONNECTED: u8 = 2;
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RdpConnectRequest {
+    session_id: Uuid,
+    /// Password digitata ora dall'utente (ha la precedenza su quella nel keyring).
+    password: Option<String>,
+    /// Impronta del certificato accettata ora dall'utente, anche senza salvarla nella sessione.
+    pinned_cert: Option<String>,
+    /// Dimensione dell'area della scheda, in pixel.
+    width: u16,
+    height: u16,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RdpConnected {
+    id: u64,
+    width: u16,
+    height: u16,
+}
+
+/// Collega una sessione RDP in una scheda. La grafica arriva su `on_frame` come byte
+/// (`[1][x][y][w][h][rgba]` o `[2][motivo]`, interi a 16 bit little-endian), gli eventi di controllo
+/// (certificato da confermare) su `on_event`. Un certificato non verificabile non si accetta mai in
+/// silenzio: la UI riceve `certUntrusted` e riprova con `pinnedCert`.
+#[tauri::command]
+async fn rdp_connect(
+    state: Shared<'_>,
+    request: RdpConnectRequest,
+    on_event: Channel<TermEvent>,
+    on_frame: Channel<InvokeResponseBody>,
+) -> Result<RdpConnected, String> {
+    let nodes = state.sessions.list().await.map_err(err)?;
+    let session = match nodes.iter().find(|n| n.id() == request.session_id) {
+        Some(SessionNode::Session(s)) if s.protocol == Protocol::Rdp => (**s).clone(),
+        Some(_) => return Err("la sessione non è una sessione RDP".into()),
+        None => return Err("sessione non trovata".into()),
+    };
+    let ctx = rdp_audit_ctx(&session);
+    if !state.policy.allows(Protocol::Rdp) {
+        state.audit(
+            &ctx,
+            "connect",
+            Outcome::Failed,
+            Some("vietato dalla policy".into()),
+        );
+        return Err("Il protocollo RDP è vietato dalla policy dell'organizzazione.".into());
+    }
+    let password = match request.password.filter(|p| !p.is_empty()) {
+        Some(p) => p,
+        None => stored_secret(&state, &session.credential_ref)
+            .await?
+            .ok_or_else(|| PASSWORD_REQUIRED.to_string())?,
+    };
+    let blank = |v: &Option<String>| v.clone().filter(|s| !s.trim().is_empty());
+    let params = pxt_rdp::SessionParams {
+        host: session.host.clone(),
+        port: session.port,
+        username: session.username.clone(),
+        password,
+        domain: blank(&session.rdp.domain),
+        width: request.width,
+        height: request.height,
+        pinned_cert: request
+            .pinned_cert
+            .or_else(|| blank(&session.rdp.pinned_cert)),
+    };
+    match pxt_rdp::RdpSession::connect(params).await {
+        Ok(s) => {
+            state.audit(
+                &ctx,
+                "connect",
+                Outcome::Ok,
+                Some("rdp: client integrato".into()),
+            );
+            let id = state.next_id();
+            let (width, height) = (s.width, s.height);
+            let (mut events, handle) = s.split();
+            state.conn_ctx.lock().unwrap().insert(id, ctx.clone());
+            state.rdp.lock().unwrap().insert(id, Arc::new(handle));
+            let pump_state = Arc::clone(&state);
+            tokio::spawn(async move {
+                while let Some(ev) = events.recv().await {
+                    let (body, ended) = match ev {
+                        pxt_rdp::RdpEvent::Update {
+                            x,
+                            y,
+                            width,
+                            height,
+                            rgba,
+                        } => {
+                            let mut b = Vec::with_capacity(9 + rgba.len());
+                            b.push(RDP_MSG_UPDATE);
+                            for v in [x, y, width, height] {
+                                b.extend_from_slice(&v.to_le_bytes());
+                            }
+                            b.extend_from_slice(&rgba);
+                            (b, false)
+                        }
+                        pxt_rdp::RdpEvent::Disconnected(reason) => {
+                            let mut b = vec![RDP_MSG_DISCONNECTED];
+                            b.extend_from_slice(reason.as_bytes());
+                            (b, true)
+                        }
+                        _ => continue,
+                    };
+                    let gone = on_frame.send(InvokeResponseBody::Raw(body)).is_err();
+                    if ended || gone {
+                        break;
+                    }
+                }
+                // Fine della sessione: si libera il motore.
+                pump_state.rdp.lock().unwrap().remove(&id);
+                pump_state.conn_ctx.lock().unwrap().remove(&id);
+                pump_state.audit(&ctx, "disconnect", Outcome::Ok, None);
+            });
+            Ok(RdpConnected { id, width, height })
+        }
+        Err(pxt_rdp::RdpError::UntrustedCertificate {
+            fingerprint,
+            changed,
+        }) => {
+            state.audit(
+                &ctx,
+                if changed {
+                    "cert_changed"
+                } else {
+                    "cert_untrusted"
+                },
+                Outcome::Failed,
+                Some(format!("SHA256 {fingerprint}")),
+            );
+            let _ = on_event.send(TermEvent::CertUntrusted {
+                host: session.host,
+                port: session.port,
+                fingerprint,
+                changed,
+            });
+            Err(CERT_UNTRUSTED.to_string())
+        }
+        Err(e) => {
+            state.audit(&ctx, "connect", Outcome::Failed, Some(e.to_string()));
+            Err(e.to_string())
+        }
+    }
+}
+
+/// Manda mouse, rotella o tasti alla sessione RDP.
+#[tauri::command]
+fn rdp_input(state: Shared<'_>, id: u64, input: pxt_rdp::RdpInput) -> Result<(), String> {
+    let handle = state.rdp.lock().unwrap().get(&id).cloned();
+    match handle {
+        Some(h) if h.send(input) => Ok(()),
+        _ => Err("sessione RDP chiusa".into()),
+    }
+}
+
+/// Chiude la sessione RDP (e il motore).
+#[tauri::command]
+fn rdp_close(state: Shared<'_>, id: u64) {
+    if let Some(h) = state.rdp.lock().unwrap().remove(&id) {
+        h.close();
     }
 }
 
@@ -2656,6 +2830,9 @@ pub fn run() {
             session_test,
             s3_connect,
             rdp_open,
+            rdp_connect,
+            rdp_input,
+            rdp_close,
             s3_object_info,
             s3_set_headers,
             s3_set_tags,

@@ -56,6 +56,14 @@ jobs:
       - name: Test
         run: cargo test --workspace
 
+      # Il motore RDP (D-32) è un programma a parte con il suo Cargo.lock.
+      - name: Motore RDP (formattazione, clippy, build)
+        working-directory: rdp-engine
+        run: |
+          cargo fmt --check
+          cargo clippy --all-targets -- -D warnings
+          cargo build --release
+
   security:
     name: Sicurezza delle dipendenze
     runs-on: ubuntu-latest
@@ -65,3 +73,8 @@ jobs:
         uses: EmbarkStudios/cargo-deny-action@v2
         with:
           command: check
+      - name: cargo deny sul motore RDP
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check
+          manifest-path: rdp-engine/Cargo.toml

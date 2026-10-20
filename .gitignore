@@ -4,3 +4,4 @@ ui/dist
 src-tauri/gen
 *.log
 testenv/keys/
+/rdp-engine/target
