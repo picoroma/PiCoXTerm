@@ -9,7 +9,7 @@
 
 [package]
 name = "picoxterm-rdp"
-version = "0.1.0-beta.3"
+version = "0.1.0-beta.4"
 edition = "2021"
 license = "GPL-3.0-only"
 authors = ["PiCo"]

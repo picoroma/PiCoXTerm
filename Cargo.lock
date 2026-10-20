@@ -4019,7 +4019,7 @@ dependencies = [
 
 [[package]]
 name = "picoxterm"
-version = "0.1.0-beta.3"
+version = "0.1.0-beta.4"
 dependencies = [
  "opener",
  "pxt-core",
@@ -4334,7 +4334,7 @@ checksum = "d55d956fa96f5ec02be2e13af0e20391a5aa83d6a074e3ad368959d0fab299ea"
 
 [[package]]
 name = "pxt-core"
-version = "0.1.0-beta.3"
+version = "0.1.0-beta.4"
 dependencies = [
  "chrono",
  "keyring",
@@ -4348,7 +4348,7 @@ dependencies = [
 
 [[package]]
 name = "pxt-fs"
-version = "0.1.0-beta.3"
+version = "0.1.0-beta.4"
 dependencies = [
  "aws-config",
  "aws-credential-types",
@@ -4369,7 +4369,7 @@ dependencies = [
 
 [[package]]
 name = "pxt-rdp"
-version = "0.1.0-beta.3"
+version = "0.1.0-beta.4"
 dependencies = [
  "pxt-rdp-proto",
  "thiserror 2.0.21",
@@ -4387,7 +4387,7 @@ dependencies = [
 
 [[package]]
 name = "pxt-ssh"
-version = "0.1.0-beta.3"
+version = "0.1.0-beta.4"
 dependencies = [
  "russh",
  "thiserror 2.0.21",
@@ -4396,7 +4396,7 @@ dependencies = [
 
 [[package]]
 name = "pxt-vnc"
-version = "0.1.0-beta.3"
+version = "0.1.0-beta.4"
 dependencies = [
  "des",
  "thiserror 2.0.21",

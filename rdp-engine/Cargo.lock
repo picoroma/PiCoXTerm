@@ -1912,7 +1912,7 @@ dependencies = [
 
 [[package]]
 name = "picoxterm-rdp"
-version = "0.1.0-beta.3"
+version = "0.1.0-beta.4"
 dependencies = [
  "ironrdp",
  "ironrdp-graphics",
