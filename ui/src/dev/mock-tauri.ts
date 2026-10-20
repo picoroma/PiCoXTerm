@@ -507,6 +507,17 @@ const handlers: Record<string, (args: any) => unknown> = {
   app_paths: () => ({ dataDir: 'C:\\Users\\mock\\PiCoXterm', auditLog: 'C:\\Users\\mock\\PiCoXterm\\logs\\audit.log' }),
   sessions_export: () => nodes.length,
   sessions_import: () => 3,
+  import_scan: ({ source }) => ({
+    candidates: [
+      { folder: [], name: 'web srv', protocol: 'ssh', host: '10.0.0.5', port: 22, username: 'admin', keyPath: 'C:\keys\web.ppk' },
+      { folder: ['Clienti', 'Acme'], name: source.kind === 'putty' ? 'db' : 'win', protocol: source.kind === 'putty' ? 'ssh' : 'rdp', host: 'db.acme.it', port: 2200, username: 'dba', keyPath: null },
+    ],
+    skipped: [{ name: 'switch', reason: 'protocol "telnet" is not supported' }],
+  }),
+  import_apply: ({ source, selected, folderName }) => {
+    ;(window as any).__importApplied = { source, selected, folderName }
+    return selected.length
+  },
   'plugin:dialog|save': () => 'C:\\tmp\\export.json',
   settings_set: (args) => (settings = args.settings),
   sessions_list: () => JSON.parse(JSON.stringify(nodes)),

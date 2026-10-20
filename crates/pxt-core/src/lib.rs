@@ -3,6 +3,7 @@
 
 pub mod audit;
 pub mod error;
+pub mod import;
 pub mod local;
 pub mod model;
 pub mod policy;

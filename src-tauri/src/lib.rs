@@ -455,6 +455,89 @@ async fn sessions_import(
     Ok(count)
 }
 
+/// Da dove importare sessioni di un altro programma (D-39).
+#[derive(Deserialize)]
+struct ImportSource {
+    /// `putty` o `mobaxterm`.
+    kind: String,
+    /// File o cartella scelti dall'utente; per PuTTY senza percorso si legge il registro (Windows)
+    /// o `~/.putty/sessions`.
+    path: Option<String>,
+}
+
+/// Legge un file sorgente, con un tetto alla dimensione.
+fn read_import_file(path: &std::path::Path) -> Result<String, String> {
+    if std::fs::metadata(path).map_err(err)?.len() > MAX_IMPORT_BYTES {
+        return Err("file troppo grande per essere un elenco di sessioni".into());
+    }
+    Ok(pxt_core::import::decode_text(
+        &std::fs::read(path).map_err(err)?,
+    ))
+}
+
+/// Sessioni PuTTY del profilo corrente: il registro su Windows (via `reg export`, senza dipendenze),
+/// `~/.putty/sessions` altrove.
+fn putty_default_scan() -> Result<pxt_core::import::Scan, String> {
+    if cfg!(windows) {
+        let tmp = std::env::temp_dir().join(format!("pxt-putty-{}.reg", std::process::id()));
+        let out = std::process::Command::new("reg")
+            .args(["export", r"HKCU\Software\SimonTatham\PuTTY\Sessions"])
+            .arg(&tmp)
+            .arg("/y")
+            .output()
+            .map_err(err)?;
+        if !out.status.success() {
+            return Err("PuTTY non ha sessioni salvate in questo profilo Windows".into());
+        }
+        let text = read_import_file(&tmp);
+        let _ = std::fs::remove_file(&tmp);
+        Ok(pxt_core::import::parse_putty_reg(&text?))
+    } else {
+        let home = std::env::var_os("HOME").ok_or("cartella utente sconosciuta")?;
+        let dir = std::path::Path::new(&home).join(".putty/sessions");
+        pxt_core::import::parse_putty_dir(&dir).map_err(err)
+    }
+}
+
+fn import_scan_source(source: &ImportSource) -> Result<pxt_core::import::Scan, String> {
+    let path = source.path.as_deref().map(std::path::Path::new);
+    match (source.kind.as_str(), path) {
+        ("putty", None) => putty_default_scan(),
+        ("putty", Some(p)) if p.is_dir() => pxt_core::import::parse_putty_dir(p).map_err(err),
+        ("putty", Some(p)) => Ok(pxt_core::import::parse_putty_reg(&read_import_file(p)?)),
+        ("mobaxterm", Some(p)) => Ok(pxt_core::import::parse_mobaxterm_ini(&read_import_file(p)?)),
+        ("mobaxterm", None) => Err("scegli il file di MobaXterm".into()),
+        _ => Err("sorgente di importazione sconosciuta".into()),
+    }
+}
+
+/// Anteprima dell'importazione: le sessioni trovate e le voci che non si possono importare.
+#[tauri::command]
+fn import_scan(source: ImportSource) -> Result<pxt_core::import::Scan, String> {
+    import_scan_source(&source)
+}
+
+/// Importa le sessioni scelte (indici dell'anteprima) in una cartella nuova; non sovrascrive nulla.
+#[tauri::command]
+async fn import_apply(
+    state: Shared<'_>,
+    source: ImportSource,
+    selected: Vec<usize>,
+    folder_name: String,
+) -> Result<usize, String> {
+    let scan = import_scan_source(&source)?;
+    let chosen: Vec<_> = selected
+        .iter()
+        .filter_map(|&i| scan.candidates.get(i).cloned())
+        .collect();
+    if chosen.is_empty() {
+        return Ok(0);
+    }
+    let nodes = pxt_core::import::build_nodes(&chosen, &folder_name);
+    state.sessions.save_many(nodes).await.map_err(err)?;
+    Ok(chosen.len())
+}
+
 #[tauri::command]
 async fn session_delete(state: Shared<'_>, id: Uuid) -> Result<(), String> {
     let nodes = state.sessions.list().await.map_err(err)?;
@@ -3273,6 +3356,8 @@ pub fn run() {
             session_delete,
             sessions_export,
             sessions_import,
+            import_scan,
+            import_apply,
             session_test,
             s3_connect,
             rdp_open,

@@ -2,6 +2,7 @@
   import { onMount, untrack } from 'svelte'
   import { invoke } from '@tauri-apps/api/core'
   import { open, save } from '@tauri-apps/plugin-dialog'
+  import ImportDialog from './ImportDialog.svelte'
   import Modal from './Modal.svelte'
   import { saveSettings, settings, type Settings } from './settings.svelte'
   import { THEME_NAMES, type ThemeName } from './themes'
@@ -13,6 +14,7 @@
   let draft = $state<Settings>(untrack(() => $state.snapshot(settings)))
   let error = $state('')
   let info = $state('')
+  let importKind = $state<'putty' | 'mobaxterm' | null>(null)
   let paths = $state<{ dataDir: string; auditLog: string } | null>(null)
   interface KnownHost {
     host: string
@@ -117,6 +119,10 @@
         <button type="button" onclick={exportSessions}>{t('exportSessions')}</button>
         <button type="button" onclick={importSessions}>{t('importSessions')}</button>
       </div>
+      <div class="row">
+        <button type="button" onclick={() => (importKind = 'putty')}>{t('importFromPutty')}</button>
+        <button type="button" onclick={() => (importKind = 'mobaxterm')}>{t('importFromMoba')}</button>
+      </div>
       <p class="hint">{t('exportHint')}</p>
       {#if paths}
         <p class="hint">{t('auditPath')}: <code>{paths.auditLog}</code></p>
@@ -148,6 +154,18 @@
     <button type="submit" form="settings-form" class="primary">{t('save')}</button>
   {/snippet}
 </Modal>
+
+{#if importKind}
+  <ImportDialog
+    kind={importKind}
+    onclose={() => (importKind = null)}
+    ondone={(n) => {
+      importKind = null
+      info = t('imported', { n })
+      onimported()
+    }}
+  />
+{/if}
 
 <style>
   form {
