@@ -2,6 +2,7 @@
   import { onMount } from 'svelte'
   import Modal from './lib/Modal.svelte'
   import SessionDialog from './lib/SessionDialog.svelte'
+  import RdpTab from './lib/RdpTab.svelte'
   import SessionTree from './lib/SessionTree.svelte'
   import TerminalTab from './lib/TerminalTab.svelte'
   import EditorTab from './lib/EditorTab.svelte'
@@ -24,7 +25,7 @@
   interface Tab {
     key: number
     /** `terminal`: sessione SSH; `sftp`: sessione SFTP; `editor`: file remoto nell'editor integrato (D-19). */
-    kind: 'terminal' | 'sftp' | 'editor'
+    kind: 'terminal' | 'sftp' | 'editor' | 'rdp'
     title: string
     target: Target
     /** Collegamento SSH della scheda, per il pannello SFTP (aggiornato dalla scheda stessa). */
@@ -61,7 +62,7 @@
   const panelTab = $derived(
     activeTab?.kind === 'editor'
       ? tabs.find((x) => x.kind === 'terminal' && x.connId === activeTab.connId)
-      : activeTab?.kind === 'sftp'
+      : activeTab?.kind === 'sftp' || activeTab?.kind === 'rdp'
         ? undefined
         : activeTab,
   )
@@ -175,8 +176,22 @@
     else openTab(s.name, { sessionId: s.id })
   }
 
-  /** RDP: si avvia il client del sistema, non c'è una scheda. */
+  /** RDP: client integrato in una scheda quando c'è il motore e non serve un gateway; altrimenti il client del sistema. */
   async function openRdp(s: Session) {
+    const o = s.rdp
+    if (o.client === 'integrated' || (o.client === 'auto' && !o.gateway)) {
+      const ok = await invoke<boolean>('rdp_engine_available').catch(() => false)
+      if (ok) {
+        const tab: Tab = { key: nextKey++, kind: 'rdp', title: s.name, target: { sessionId: s.id }, connId: null, cwd: '', status: 'connecting', tracking: { state: 'off', shell: null, message: null }, editPath: '', dirty: false }
+        tabs.push(tab)
+        activeKey = tab.key
+        return
+      }
+      if (o.client === 'integrated') {
+        notice = t('rdpEngineMissing')
+        return
+      }
+    }
     try {
       await invoke('rdp_open', { sessionId: s.id, password: null })
       notice = t('rdpStarted', { name: s.name })
@@ -210,7 +225,8 @@
       const n = nodes.find((x) => x.id === sessionId)
       if (n?.type === 'session') {
         const copy = $state.snapshot(n) as Session
-        copy.ftp = { ...copy.ftp, pinnedCert: fingerprint }
+        if (copy.protocol === 'rdp') copy.rdp = { ...copy.rdp, pinnedCert: fingerprint }
+        else copy.ftp = { ...copy.ftp, pinnedCert: fingerprint }
         await saveNode(copy, null, false)
         await reload()
       }
@@ -389,7 +405,7 @@
           style:border-top-color={sessionUi(tab.target.sessionId)?.color ?? undefined}
           role="presentation"
         >
-          <button role="tab" aria-selected={tab.key === activeKey} title={tab.kind === 'editor' ? tab.editPath : undefined} onclick={() => (activeKey = tab.key)}>{tab.kind === 'editor' ? '✎ ' : tab.kind === 'sftp' ? '⇄ ' : ''}{tab.title}{tab.dirty ? ' ●' : ''}</button>
+          <button role="tab" aria-selected={tab.key === activeKey} title={tab.kind === 'editor' ? tab.editPath : undefined} onclick={() => (activeKey = tab.key)}>{tab.kind === 'editor' ? '✎ ' : tab.kind === 'sftp' ? '⇄ ' : tab.kind === 'rdp' ? '🖵 ' : ''}{tab.title}{tab.dirty ? ' ●' : ''}</button>
           <button class="x" aria-label={t('closeTab')} title={t('closeTab')} onclick={() => requestClose(tab.key)}>×</button>
         </div>
       {/each}
@@ -399,6 +415,15 @@
       {#each tabs as tab (tab.key)}
         {#if tab.kind === 'editor' && tab.connId !== null}
           <EditorTab connId={tab.connId} path={tab.editPath} name={tab.title} active={tab.key === activeKey} bind:dirty={tab.dirty} />
+        {:else if tab.kind === 'rdp'}
+          <RdpTab
+            target={tab.target}
+            active={tab.key === activeKey}
+            onpincert={tab.target.sessionId ? certPinner(tab.target.sessionId) : undefined}
+            savePassword={tab.target.sessionId ? passwordSaver(tab.target.sessionId) : undefined}
+            bind:connId={tab.connId}
+            bind:status={tab.status}
+          />
         {:else if tab.kind === 'sftp'}
           <SftpTab
             target={tab.target}

@@ -61,13 +61,14 @@ export interface Session {
   }
   rdp: {
     domain: string | null
-    client: 'auto' | 'mstsc' | 'windows-app' | 'freerdp'
+    client: 'auto' | 'integrated' | 'mstsc' | 'windows-app' | 'freerdp'
     fullscreen: boolean
     multimon: boolean
     resolution: string | null
     redirectClipboard: boolean
     redirectDrives: boolean
     gateway: string | null
+    pinnedCert: string | null
   }
   ui: SessionUi
   notes: string
@@ -115,7 +116,7 @@ export function newSession(parentId: Uuid | null, protocol: Session['protocol'] 
     sftp: { startPath: null, showHidden: false },
     ftp: { security: 'explicit', pinnedCert: null, startPath: null, showHidden: false },
     s3: { region: 'us-east-1', endpoint: null, pathStyle: false, bucket: null, profile: null, showHidden: false },
-    rdp: { domain: null, client: 'auto', fullscreen: false, multimon: false, resolution: null, redirectClipboard: true, redirectDrives: false, gateway: null },
+    rdp: { domain: null, client: 'auto', fullscreen: false, multimon: false, resolution: null, redirectClipboard: true, redirectDrives: false, gateway: null, pinnedCert: null },
     ui: { color: null, icon: null, tags: [], theme: null, fontFamily: null, fontSize: null, background: null },
     notes: '',
     createdAt: now,

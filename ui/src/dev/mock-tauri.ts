@@ -177,6 +177,58 @@ const handlers: Record<string, (args: any) => unknown> = {
   ssh_resize: () => {},
   ssh_enable_cwd_tracking: () => ({ type: 'tracking', state: 'active', shell: '/bin/bash', message: null }),
   sftp_home: ({ id }) => (s3Conns.has(id) ? '/' : '/home/u'),
+  rdp_engine_available: () => (window as any).__noEngine !== true,
+  // RDP integrato finto: un desktop a gradiente, un riquadro che segue il mouse e la conferma del certificato.
+  rdp_connect: async ({ request, onEvent, onFrame }) => {
+    ;(window as any).__lastRdpConnect = request
+    const sess: any = nodes.find((n) => n.id === request.sessionId)
+    const pinned = request.pinnedCert ?? sess.rdp.pinnedCert
+    if (!pinned) {
+      emit(onEvent, { type: 'certUntrusted', host: sess.host, port: sess.port, fingerprint: 'AB:CD:EF:01:23:45:67:89:AB:CD:EF:01:23:45:67:89:AB:CD:EF:01:23:45:67:89:AB:CD:EF:01:23:45:67:89', changed: false })
+      throw 'certificate-untrusted'
+    }
+    if (!sess.credentialRef && !request.password) throw 'password-required'
+    const w = request.width
+    const h = request.height
+    const id = ++connSeq
+    ;(window as any).__rdpInputs = []
+    const frame = (x: number, y: number, fw: number, fh: number, color: (px: number, py: number) => [number, number, number]) => {
+      const b = new Uint8Array(9 + fw * fh * 4)
+      b[0] = 1
+      const dv = new DataView(b.buffer)
+      dv.setUint16(1, x, true)
+      dv.setUint16(3, y, true)
+      dv.setUint16(5, fw, true)
+      dv.setUint16(7, fh, true)
+      for (let j = 0; j < fh; j++) {
+        for (let i = 0; i < fw; i++) {
+          const [r, g, bl] = color(x + i, y + j)
+          const o = 9 + (j * fw + i) * 4
+          b[o] = r
+          b[o + 1] = g
+          b[o + 2] = bl
+          b[o + 3] = 255
+        }
+      }
+      return Array.from(b)
+    }
+    setTimeout(() => {
+      emit(onFrame, frame(0, 0, w, h, (px, py) => [Math.round((px / w) * 80), 90 + Math.round((py / h) * 80), 160]))
+      emit(onFrame, frame(40, 40, 260, 70, () => [235, 235, 235]))
+    }, 50)
+    ;(window as any).__rdpMark = (x: number, y: number) => emit(onFrame, frame(x, y, 24, 24, () => [220, 40, 40]))
+    ;(window as any).__rdpEnd = (reason: string) => {
+      const enc = new TextEncoder().encode(reason)
+      emit(onFrame, Array.from([2, ...enc]))
+    }
+    return { id, width: w, height: h }
+  },
+  rdp_input: ({ input }) => {
+    ;((window as any).__rdpInputs ??= []).push(input)
+  },
+  rdp_close: () => {
+    ;(window as any).__rdpClosed = true
+  },
   rdp_open: ({ sessionId, password }) => {
     ;(window as any).__lastRdp = { sessionId, password }
   },

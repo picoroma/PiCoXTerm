@@ -65,6 +65,7 @@
   let rdpClipboard = $state(initial.rdp.redirectClipboard)
   let rdpDrives = $state(initial.rdp.redirectDrives)
   let rdpGateway = $state(initial.rdp.gateway ?? '')
+  let rdpPinned = $state(initial.rdp.pinnedCert)
   let s3Region = $state(initial.s3.region)
   let s3Endpoint = $state(initial.s3.endpoint ?? '')
   let s3PathStyle = $state(initial.s3.pathStyle)
@@ -173,6 +174,7 @@
             redirectClipboard: rdpClipboard,
             redirectDrives: rdpDrives,
             gateway: rdpGateway.trim() || null,
+            pinnedCert: rdpPinned,
           }
         : initial.rdp,
       s3: isS3
@@ -325,6 +327,7 @@
           {t('rdpClient')}
           <select bind:value={rdpClient}>
             <option value="auto">{t('rdpClientAuto')}</option>
+            <option value="integrated">{t('rdpClientIntegrated')}</option>
             <option value="mstsc">mstsc (Windows)</option>
             <option value="windows-app">Windows App (macOS)</option>
             <option value="freerdp">FreeRDP</option>
@@ -337,6 +340,12 @@
         <label class="check"><input type="checkbox" bind:checked={rdpClipboard} /> {t('rdpClipboard')}</label>
         <label class="check"><input type="checkbox" bind:checked={rdpDrives} /> {t('rdpDrives')}</label>
         {#if rdpDrives}<p class="hint warn" role="status">{t('rdpDrivesWarn')}</p>{/if}
+        {#if rdpPinned}
+          <div class="hint pin">
+            <span>{t('ftpPinned')}: <code>{rdpPinned}</code></span>
+            <button type="button" onclick={() => (rdpPinned = null)}>{t('ftpForgetCert')}</button>
+          </div>
+        {/if}
         <p class="hint">{t('rdpPasswordHint')}</p>
       </fieldset>
     {/if}

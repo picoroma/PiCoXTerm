@@ -5,6 +5,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
 
 ## [Unreleased]
 
+### Added
+- **RDP in a tab** (integrated client, built on IronRDP): the session opens inside PiCoXterm like any other tab, with mouse, wheel, full keyboard (physical scancodes, AltGr, F-keys), Ctrl+Alt+Del, fit-to-window and full screen. NLA/CredSSP sign-in; a server certificate that cannot be verified is never accepted silently (you confirm its fingerprint, and it is saved in the session). The RDP engine runs as a separate program (`picoxterm-rdp`) next to the app, which also isolates the protocol parser. Sessions with an RD Gateway, or with the client set to a system one, still use the system client. Clipboard, dynamic resizing and detaching the tab into its own window are not included yet.
 ## [0.1.0-beta.2] - 2026-10-19
 
 Second test release. Windows only, unsigned (SmartScreen will warn). Now free software under the GPL-3.0.

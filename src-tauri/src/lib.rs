@@ -1656,6 +1656,12 @@ async fn rdp_connect(
     }
 }
 
+/// Il motore RDP integrato è presente accanto all'app? (Se no, le sessioni RDP usano il client di sistema.)
+#[tauri::command]
+fn rdp_engine_available() -> bool {
+    pxt_rdp::engine_path().is_ok()
+}
+
 /// Manda mouse, rotella o tasti alla sessione RDP.
 #[tauri::command]
 fn rdp_input(state: Shared<'_>, id: u64, input: pxt_rdp::RdpInput) -> Result<(), String> {
@@ -2831,6 +2837,7 @@ pub fn run() {
             s3_connect,
             rdp_open,
             rdp_connect,
+            rdp_engine_available,
             rdp_input,
             rdp_close,
             s3_object_info,
