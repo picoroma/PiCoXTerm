@@ -3,7 +3,7 @@
 A lightweight remote access client, inspired by MobaXterm but minimal and "auditable by construction".
 Windows, Linux, macOS · Tauri 2 + Rust · xterm.js terminal.
 
-Current release: **0.1.0-beta.2** (Windows only, unsigned). See the [changelog](CHANGELOG.md).
+Current release: **0.1.0-beta.3** (Windows only, unsigned). See the [changelog](CHANGELOG.md).
 
 ## What it does today (M2 nearly complete)
 

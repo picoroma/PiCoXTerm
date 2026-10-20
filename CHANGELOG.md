@@ -5,8 +5,19 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
 
 ## [Unreleased]
 
+## [0.1.0-beta.3] - 2026-10-20
+
+Third test release. Windows only, unsigned (SmartScreen will warn). **New: RDP in a tab.** The zip now contains a second program, `picoxterm-rdp.exe`, that must stay next to `picoxterm.exe`.
+
 ### Added
 - **RDP in a tab** (integrated client, built on IronRDP): the session opens inside PiCoXterm like any other tab, with mouse, wheel, full keyboard (physical scancodes, AltGr, F-keys), Ctrl+Alt+Del, fit-to-window and full screen. NLA/CredSSP sign-in; a server certificate that cannot be verified is never accepted silently (you confirm its fingerprint, and it is saved in the session). The RDP engine runs as a separate program (`picoxterm-rdp`) next to the app, which also isolates the protocol parser. Sessions with an RD Gateway, or with the client set to a system one, still use the system client. The keyboard layout of your PC is sent to the server (physical keys are interpreted with it, so `-`, `@`, `#` come out right). **Text clipboard** works both ways (copy on the server, paste on your PC and the other way round; shared only if "Share the clipboard" is on in the session; text only, up to 4 MiB). The desktop is scaled to the tab when the window is resized. If the app dies, the RDP engine is terminated with it. **Automatic resolution**: when you resize the window the remote desktop is re-laid-out at the new size (after a short pause; the "Auto resolution" button turns it off and the desktop is then just scaled). Files in the clipboard and detaching the tab into its own window are not included yet.
+### Known limits
+- RDP: text clipboard only (no files or images); the tab cannot be detached into its own window yet; no audio or drive sharing in the integrated client; RD Gateway sessions use the system client; Kerberos sign-in is untested (NTLM works).
+- `picoxterm-rdp.exe` must stay next to `picoxterm.exe`; without it RDP sessions open the Windows client.
+- Directory tracking works with bash, zsh and tcsh only (not ksh, csh, ash).
+- S3 uploads cannot be resumed after a pause; S3 with an AWS SSO profile is untested.
+- Tested on Windows only; portable mode not verified end to end. Not signed.
+
 ## [0.1.0-beta.2] - 2026-10-19
 
 Second test release. Windows only, unsigned (SmartScreen will warn). Now free software under the GPL-3.0.
