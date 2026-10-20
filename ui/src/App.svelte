@@ -419,6 +419,7 @@
           <RdpTab
             target={tab.target}
             active={tab.key === activeKey}
+            shareClipboard={(nodes.find((x) => x.id === tab.target.sessionId) as Session | undefined)?.rdp.redirectClipboard ?? true}
             onpincert={tab.target.sessionId ? certPinner(tab.target.sessionId) : undefined}
             savePassword={tab.target.sessionId ? passwordSaver(tab.target.sessionId) : undefined}
             bind:connId={tab.connId}

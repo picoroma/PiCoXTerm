@@ -5,6 +5,8 @@ use std::fmt;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use ironrdp::cliprdr::pdu::{ClipboardFormat, ClipboardFormatId, OwnedFormatDataResponse};
+use ironrdp::cliprdr::{Client, Cliprdr, CliprdrSvcMessages};
 use ironrdp::connector::{self, ClientConnector, Credentials, DesktopSize};
 use ironrdp::input::{Database, MouseButton, MousePosition, Operation, Scancode, WheelRotations};
 use ironrdp::pdu::gcc::KeyboardType;
@@ -21,6 +23,7 @@ use rustls::pki_types::ServerName;
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 
+use crate::clipboard::{decode_text, encode_text, ClipEvent, TextBackend, MAX_TEXT_BYTES};
 use crate::tls::{self, SeenCert};
 
 /// Tempo massimo per TCP, TLS, NLA e negoziazione.
@@ -47,6 +50,8 @@ pub struct Established {
     framed: TlsFramed,
     stage: ActiveStage,
     image: DecodedImage,
+    /// Eventi degli appunti condivisi (se attivi per questa sessione).
+    clip_rx: Option<mpsc::UnboundedReceiver<ClipEvent>>,
 }
 
 fn config(p: &Connect, width: u16, height: u16) -> connector::Config {
@@ -137,6 +142,12 @@ async fn connect_inner(params: Connect, seen: SeenCert) -> Result<Established, C
         .map_err(|e| ConnectError::Connect(text(&e)))?;
     let mut framed = TokioFramed::new(tcp);
     let mut connector = ClientConnector::new(config(&params, width, height), client_addr);
+    let mut clip_rx = None;
+    if params.clipboard {
+        let (tx, rx) = mpsc::unbounded_channel();
+        connector.attach_static_channel(Cliprdr::<Client>::new(Box::new(TextBackend::new(tx))));
+        clip_rx = Some(rx);
+    }
 
     let should_upgrade = connect_begin(&mut framed, &mut connector)
         .await
@@ -210,6 +221,7 @@ async fn connect_inner(params: Connect, seen: SeenCert) -> Result<Established, C
         framed,
         stage,
         image,
+        clip_rx,
     })
 }
 
@@ -279,6 +291,7 @@ fn extract(
 /// Cosa si chiede al ciclo di una sessione già aperta.
 pub enum Command {
     Input(Input),
+    SetClipboard(String),
     Close,
 }
 
@@ -293,8 +306,10 @@ pub async fn run(
         mut framed,
         mut stage,
         mut image,
+        mut clip_rx,
         ..
     } = est;
+    let mut clip = ClipState::default();
     let mut db = Database::new();
     'outer: loop {
         tokio::select! {
@@ -329,6 +344,21 @@ pub async fn run(
                     }
                 }
             }
+            ev = async {
+                match clip_rx.as_mut() {
+                    Some(r) => r.recv().await,
+                    None => std::future::pending().await,
+                }
+            } => {
+                if let Some(ev) = ev {
+                    if std::env::var_os("PXT_RDP_DEBUG").is_some() {
+                        eprintln!("appunti: evento {ev:?}");
+                    }
+                    if let Err(e) = handle_clip(ev, &mut clip, &mut stage, &mut framed, &out).await {
+                        break 'outer e;
+                    }
+                }
+            }
             cmd = commands.recv() => {
                 match cmd {
                     None | Some(Command::Close) => {
@@ -340,6 +370,14 @@ pub async fn run(
                             }
                         }
                         break 'outer "chiusa".to_string();
+                    }
+                    Some(Command::SetClipboard(t)) => {
+                        if t.len() <= MAX_TEXT_BYTES {
+                            clip.local = Some(t);
+                            if let Err(e) = advertise(&mut clip, &mut stage, &mut framed).await {
+                                break 'outer e;
+                            }
+                        }
                     }
                     Some(Command::Input(i)) => {
                         let fast = if matches!(i, Input::ReleaseAll) {
@@ -369,6 +407,105 @@ pub async fn run(
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+/// Stato degli appunti di una sessione.
+#[derive(Default)]
+struct ClipState {
+    /// Il canale è pronto: si può annunciare e chiedere dati.
+    ready: bool,
+    /// Ultimo testo copiato sul computer (quello che il server può incollare).
+    local: Option<String>,
+}
+
+async fn send_clip(
+    stage: &mut ActiveStage,
+    framed: &mut TlsFramed,
+    msgs: CliprdrSvcMessages<Client>,
+) -> Result<(), String> {
+    let bytes = stage
+        .process_svc_processor_messages(msgs)
+        .map_err(|e| format!("appunti: {e}"))?;
+    framed
+        .write_all(&bytes)
+        .await
+        .map_err(|e| format!("scrittura: {e}"))
+}
+
+/// Annuncia al server i formati disponibili sul computer: il testo, se c'è, altrimenti niente.
+/// Mandare l'elenco (anche vuoto) all'avvio del canale completa la negoziazione.
+async fn advertise(
+    clip: &mut ClipState,
+    stage: &mut ActiveStage,
+    framed: &mut TlsFramed,
+) -> Result<(), String> {
+    let formats: Vec<ClipboardFormat> = if clip.local.is_some() {
+        vec![ClipboardFormat::new(ClipboardFormatId::CF_UNICODETEXT)]
+    } else {
+        Vec::new()
+    };
+    let Some(c) = stage.get_svc_processor_mut::<Cliprdr<Client>>() else {
+        return Ok(());
+    };
+    // Un errore degli appunti (canale non ancora pronto, per esempio) non deve chiudere la sessione.
+    match c.initiate_copy(&formats) {
+        Ok(msgs) => send_clip(stage, framed, msgs).await,
+        Err(_) => Ok(()),
+    }
+}
+
+async fn handle_clip(
+    ev: ClipEvent,
+    clip: &mut ClipState,
+    stage: &mut ActiveStage,
+    framed: &mut TlsFramed,
+    out: &mpsc::Sender<FromEngine>,
+) -> Result<(), String> {
+    match ev {
+        ClipEvent::Ready => {
+            clip.ready = true;
+            if clip.local.is_some() {
+                advertise(clip, stage, framed).await?;
+            }
+            Ok(())
+        }
+        ClipEvent::RequestFormatList => advertise(clip, stage, framed).await,
+        ClipEvent::RemoteCopy(ids) => {
+            if !ids.contains(&ClipboardFormatId::CF_UNICODETEXT) {
+                return Ok(());
+            }
+            let Some(c) = stage.get_svc_processor_mut::<Cliprdr<Client>>() else {
+                return Ok(());
+            };
+            match c.initiate_paste(ClipboardFormatId::CF_UNICODETEXT) {
+                Ok(msgs) => send_clip(stage, framed, msgs).await,
+                Err(_) => Ok(()),
+            }
+        }
+        ClipEvent::DataResponse(Some(data)) => {
+            if data.len() <= MAX_TEXT_BYTES * 2 {
+                let text = decode_text(&data);
+                if !text.is_empty() {
+                    let _ = out.send(FromEngine::ClipboardText(text)).await;
+                }
+            }
+            Ok(())
+        }
+        ClipEvent::DataResponse(None) => Ok(()),
+        ClipEvent::DataRequest(fmt) => {
+            let Some(c) = stage.get_svc_processor_mut::<Cliprdr<Client>>() else {
+                return Ok(());
+            };
+            let response = match (&clip.local, fmt == ClipboardFormatId::CF_UNICODETEXT) {
+                (Some(t), true) => OwnedFormatDataResponse::new_data(encode_text(t)),
+                _ => OwnedFormatDataResponse::new_error(),
+            };
+            match c.submit_format_data(response) {
+                Ok(msgs) => send_clip(stage, framed, msgs).await,
+                Err(_) => Ok(()),
             }
         }
     }

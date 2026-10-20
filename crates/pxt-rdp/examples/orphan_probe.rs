@@ -13,6 +13,7 @@ fn params(pinned: Option<String>) -> SessionParams {
         height: 768,
         pinned_cert: pinned,
         keyboard_layout: 0x410,
+        clipboard: false,
     }
 }
 

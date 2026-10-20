@@ -128,15 +128,17 @@ export const CTRL_ALT_DEL: { scancode: number; pressed: boolean }[] = [
   { scancode: 0x1d, pressed: false },
 ]
 
-/** Messaggi binari della grafica: `[1][x][y][w][h][rgba]` (interi a 16 bit little-endian) o `[2][motivo]`. */
+/** Messaggi binari: grafica `[1][x][y][w][h][rgba]` (interi a 16 bit little-endian), fine `[2][motivo]`, testo copiato nel server `[3][utf-8]`. */
 export type RdpFrame =
   | { kind: 'update'; x: number; y: number; width: number; height: number; rgba: Uint8ClampedArray }
   | { kind: 'disconnected'; reason: string }
+  | { kind: 'clipboard'; text: string }
   | null
 
 export function parseFrame(buf: ArrayBuffer | number[]): RdpFrame {
   const u8 = buf instanceof ArrayBuffer ? new Uint8Array(buf) : Uint8Array.from(buf)
   if (u8.length === 0) return null
+  if (u8[0] === 3) return { kind: 'clipboard', text: new TextDecoder().decode(u8.subarray(1)) }
   if (u8[0] === 2) return { kind: 'disconnected', reason: new TextDecoder().decode(u8.subarray(1)) }
   if (u8[0] === 1 && u8.length >= 9) {
     const dv = new DataView(u8.buffer, u8.byteOffset, u8.byteLength)

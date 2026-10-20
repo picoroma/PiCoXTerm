@@ -216,12 +216,16 @@ const handlers: Record<string, (args: any) => unknown> = {
       emit(onFrame, frame(0, 0, w, h, (px, py) => [Math.round((px / w) * 80), 90 + Math.round((py / h) * 80), 160]))
       emit(onFrame, frame(40, 40, 260, 70, () => [235, 235, 235]))
     }, 50)
+    ;(window as any).__rdpRemoteCopy = (text: string) => emit(onFrame, Array.from([3, ...new TextEncoder().encode(text)]))
     ;(window as any).__rdpMark = (x: number, y: number) => emit(onFrame, frame(x, y, 24, 24, () => [220, 40, 40]))
     ;(window as any).__rdpEnd = (reason: string) => {
       const enc = new TextEncoder().encode(reason)
       emit(onFrame, Array.from([2, ...enc]))
     }
     return { id, width: w, height: h }
+  },
+  rdp_clipboard_set: ({ text }) => {
+    ;((window as any).__rdpClipSent ??= []).push(text)
   },
   rdp_input: ({ input }) => {
     ;((window as any).__rdpInputs ??= []).push(input)

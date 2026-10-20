@@ -2,6 +2,8 @@
 //! protocollo `pxt-rdp-proto` su stdin/stdout. Niente porte in ascolto; i log vanno su stderr e non
 //! contengono mai la password.
 
+mod clipboard;
+mod parent;
 mod session;
 mod tls;
 
@@ -15,6 +17,14 @@ use tokio::sync::mpsc;
 use crate::session::{Command, ConnectError};
 
 fn main() {
+    use std::io::IsTerminal as _;
+    if io::stdin().is_terminal() {
+        // Avviato a mano (doppio clic, terminale): non serve a nulla da solo.
+        eprintln!("picoxterm-rdp è il motore RDP di PiCoXterm: lo avvia il programma, non va lanciato a mano.");
+        eprintln!("Premi Invio per chiudere.");
+        let _ = io::stdin().read_line(&mut String::new());
+        return;
+    }
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -54,6 +64,9 @@ async fn real_main() -> i32 {
                 Ok(Some(ToEngine::Input(i))) => {
                     let _ = cmd_tx.send(Command::Input(i));
                 }
+                Ok(Some(ToEngine::SetClipboard(t))) => {
+                    let _ = cmd_tx.send(Command::SetClipboard(t));
+                }
                 Ok(Some(ToEngine::Close)) | Ok(None) | Err(_) => {
                     let _ = cmd_tx.send(Command::Close);
                     break;
@@ -65,6 +78,8 @@ async fn real_main() -> i32 {
     let Ok(params) = connect_rx.await else {
         return 0;
     };
+    // Se l'app che mi ha avviato finisce, finisco anch'io (anche se le pipe non si chiudessero).
+    parent::exit_with(params.parent_pid);
     match session::connect(params).await {
         Err(e) => {
             let msg = match e {

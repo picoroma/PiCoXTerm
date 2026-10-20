@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte'
   import { Channel, invoke } from '@tauri-apps/api/core'
+  import { readText, writeText } from '@tauri-apps/plugin-clipboard-manager'
   import ConnectPrompts, { type CertRequest } from './ConnectPrompts.svelte'
   import { CTRL_ALT_DEL, parseFrame, scancodeOf, type RdpFrame } from './rdp'
   import { t } from '../i18n'
@@ -13,6 +14,7 @@
     active,
     onpincert,
     savePassword,
+    shareClipboard = true,
     connId = $bindable(null),
     status = $bindable('connecting'),
   }: {
@@ -21,6 +23,8 @@
     /** Salva nella sessione l'impronta del certificato che l'utente ha accettato. */
     onpincert?: (fingerprint: string) => Promise<void>
     savePassword?: (password: string) => Promise<void>
+    /** Gli appunti (solo testo) sono condivisi con il server per questa sessione. */
+    shareClipboard?: boolean
     connId?: number | null
     status?: 'connecting' | 'connected' | 'closed'
   } = $props()
@@ -76,6 +80,12 @@
     onFrame.onmessage = (buf) => {
       const f = parseFrame(buf)
       if (!f) return
+      if (f.kind === 'clipboard') {
+        // Testo copiato nel server: finisce negli appunti del computer (e non si rimanda indietro).
+        lastClipboard = f.text
+        void writeText(f.text).catch(() => {})
+        return
+      }
       if (f.kind === 'disconnected') {
         endReason = f.reason
         status = 'closed'
@@ -149,6 +159,25 @@
     connId = null
     status = 'closed'
     if (id !== null) await invoke('rdp_close', { id })
+  }
+
+  // ---- Appunti: solo testo ----
+  /** Ultimo testo scambiato (in un verso o nell'altro): evita di rimandarlo indietro. */
+  let lastClipboard = ''
+  const MAX_CLIPBOARD = 4 * 1024 * 1024
+
+  /** Il testo copiato sul computer diventa incollabile nel server. Si legge solo quando la scheda prende il fuoco. */
+  async function syncClipboard() {
+    const id = connId
+    if (id === null || !shareClipboard) return
+    try {
+      const text = await readText()
+      if (!text || text === lastClipboard || text.length > MAX_CLIPBOARD) return
+      lastClipboard = text
+      await invoke('rdp_clipboard_set', { id, text })
+    } catch {
+      /* appunti non disponibili o con altro contenuto (immagini): niente da fare */
+    }
   }
 
   // ---- Input: tutto passa da una coda, così l'ordine di tasti e pulsanti è sempre rispettato ----
@@ -294,6 +323,7 @@
         {onpointerup}
         {onwheel}
         {onblur}
+        onfocus={syncClipboard}
         onkeydown={(e) => key(e, true)}
         onkeyup={(e) => key(e, false)}
         oncontextmenu={(e) => e.preventDefault()}

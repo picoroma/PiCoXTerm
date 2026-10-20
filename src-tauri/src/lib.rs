@@ -1508,6 +1508,7 @@ async fn rdp_test(state: &Arc<AppState>, session: &Session) -> TestResult {
 /// Marcatori dei messaggi binari verso la scheda: aggiornamento di grafica o fine della sessione.
 const RDP_MSG_UPDATE: u8 = 1;
 const RDP_MSG_DISCONNECTED: u8 = 2;
+const RDP_MSG_CLIPBOARD: u8 = 3;
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1576,6 +1577,7 @@ async fn rdp_connect(
             .pinned_cert
             .or_else(|| blank(&session.rdp.pinned_cert)),
         keyboard_layout: pxt_rdp::system_keyboard_layout(),
+        clipboard: session.rdp.redirect_clipboard,
     };
     match pxt_rdp::RdpSession::connect(params).await {
         Ok(s) => {
@@ -1613,6 +1615,11 @@ async fn rdp_connect(
                             let mut b = vec![RDP_MSG_DISCONNECTED];
                             b.extend_from_slice(reason.as_bytes());
                             (b, true)
+                        }
+                        pxt_rdp::RdpEvent::ClipboardText(text) => {
+                            let mut b = vec![RDP_MSG_CLIPBOARD];
+                            b.extend_from_slice(text.as_bytes());
+                            (b, false)
                         }
                         _ => continue,
                     };
@@ -1669,6 +1676,17 @@ fn rdp_input(state: Shared<'_>, id: u64, input: pxt_rdp::RdpInput) -> Result<(),
     let handle = state.rdp.lock().unwrap().get(&id).cloned();
     match handle {
         Some(h) if h.send(input) => Ok(()),
+        _ => Err("sessione RDP chiusa".into()),
+    }
+}
+
+/// Rende incollabile nella sessione RDP il testo appena copiato sul computer (se gli appunti sono
+/// condivisi per questa sessione).
+#[tauri::command]
+fn rdp_clipboard_set(state: Shared<'_>, id: u64, text: String) -> Result<(), String> {
+    let handle = state.rdp.lock().unwrap().get(&id).cloned();
+    match handle {
+        Some(h) if h.send_clipboard(text) => Ok(()),
         _ => Err("sessione RDP chiusa".into()),
     }
 }
@@ -2840,6 +2858,7 @@ pub fn run() {
             rdp_connect,
             rdp_engine_available,
             rdp_input,
+            rdp_clipboard_set,
             rdp_close,
             s3_object_info,
             s3_set_headers,

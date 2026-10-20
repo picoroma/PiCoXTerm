@@ -28,6 +28,12 @@ pub struct Connect {
     /// Serve perché si mandano i tasti fisici: il server li interpreta con questo layout.
     #[serde(default)]
     pub keyboard_layout: u32,
+    /// Condivide gli appunti (solo testo) fra il computer e il server.
+    #[serde(default)]
+    pub clipboard: bool,
+    /// Processo dell'app che ha avviato il motore: se finisce, il motore finisce con lui (0 = non noto).
+    #[serde(default)]
+    pub parent_pid: u32,
 }
 
 impl std::fmt::Debug for Connect {
@@ -56,6 +62,8 @@ pub enum Input {
 pub enum ToEngine {
     Connect(Connect),
     Input(Input),
+    /// Testo appena copiato sul computer, da rendere incollabile nel server.
+    SetClipboard(String),
     Close,
 }
 
@@ -95,16 +103,20 @@ pub enum FromEngine {
         rgba: Vec<u8>,
     },
     Disconnected(String),
+    /// Testo copiato sul server, da mettere negli appunti del computer.
+    ClipboardText(String),
 }
 
 const T_CONNECT: u8 = 0x01;
 const T_INPUT: u8 = 0x02;
 const T_CLOSE: u8 = 0x03;
+const T_SET_CLIPBOARD: u8 = 0x04;
 const T_CONNECTED: u8 = 0x10;
 const T_CERT: u8 = 0x11;
 const T_FAILED: u8 = 0x12;
 const T_UPDATE: u8 = 0x20;
 const T_DISCONNECTED: u8 = 0x21;
+const T_CLIPBOARD_TEXT: u8 = 0x22;
 
 fn bad(msg: &str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, msg.to_string())
@@ -133,6 +145,7 @@ pub fn write_to_engine(out: &mut impl Write, m: &ToEngine) -> io::Result<()> {
     match m {
         ToEngine::Connect(c) => put(out, T_CONNECT, &json(c)?),
         ToEngine::Input(i) => put(out, T_INPUT, &json(i)?),
+        ToEngine::SetClipboard(t) => put(out, T_SET_CLIPBOARD, t.as_bytes()),
         ToEngine::Close => put(out, T_CLOSE, &[]),
     }
 }
@@ -157,6 +170,7 @@ pub fn write_from_engine(out: &mut impl Write, m: &FromEngine) -> io::Result<()>
             put(out, T_UPDATE, &body)
         }
         FromEngine::Disconnected(r) => put(out, T_DISCONNECTED, r.as_bytes()),
+        FromEngine::ClipboardText(t) => put(out, T_CLIPBOARD_TEXT, t.as_bytes()),
     }
 }
 
@@ -187,6 +201,7 @@ pub fn read_to_engine(input: &mut impl Read) -> io::Result<Option<ToEngine>> {
         T_CONNECT => ToEngine::Connect(from_json(&body)?),
         T_INPUT => ToEngine::Input(from_json(&body)?),
         T_CLOSE => ToEngine::Close,
+        T_SET_CLIPBOARD => ToEngine::SetClipboard(String::from_utf8_lossy(&body).into_owned()),
         _ => return Err(bad("tipo di messaggio sconosciuto")),
     }))
 }
@@ -217,6 +232,7 @@ pub fn read_from_engine(input: &mut impl Read) -> io::Result<Option<FromEngine>>
             }
         }
         T_DISCONNECTED => FromEngine::Disconnected(String::from_utf8_lossy(&body).into_owned()),
+        T_CLIPBOARD_TEXT => FromEngine::ClipboardText(String::from_utf8_lossy(&body).into_owned()),
         _ => return Err(bad("tipo di messaggio sconosciuto")),
     }))
 }
@@ -236,6 +252,8 @@ mod tests {
             height: 800,
             pinned_cert: None,
             keyboard_layout: 0x410,
+            clipboard: true,
+            parent_pid: 0,
         }
     }
 
@@ -337,6 +355,26 @@ mod tests {
         }
         match read_from_engine(&mut r).unwrap().unwrap() {
             FromEngine::Disconnected(s) => assert_eq!(s, "fine"),
+            m => panic!("{m:?}"),
+        }
+    }
+
+    #[test]
+    fn clipboard_messages_roundtrip() {
+        let mut buf = Vec::new();
+        write_to_engine(&mut buf, &ToEngine::SetClipboard("ciao è ✓".into())).unwrap();
+        write_from_engine(
+            &mut buf,
+            &FromEngine::ClipboardText("dal server\nriga 2".into()),
+        )
+        .unwrap();
+        let mut r = buf.as_slice();
+        match read_to_engine(&mut r).unwrap().unwrap() {
+            ToEngine::SetClipboard(t) => assert_eq!(t, "ciao è ✓"),
+            m => panic!("{m:?}"),
+        }
+        match read_from_engine(&mut r).unwrap().unwrap() {
+            FromEngine::ClipboardText(t) => assert_eq!(t, "dal server\nriga 2"),
             m => panic!("{m:?}"),
         }
     }

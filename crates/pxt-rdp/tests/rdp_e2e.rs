@@ -34,6 +34,7 @@ fn params(pinned: Option<String>) -> SessionParams {
         height: 768,
         pinned_cert: pinned,
         keyboard_layout: 0x409,
+        clipboard: true,
     }
 }
 
@@ -258,4 +259,78 @@ async fn the_keyboard_layout_decides_whether_a_typed_password_is_right() {
         american < 500_000,
         "con il layout americano il logon doveva fallire ({american})"
     );
+}
+
+/// Esegue un comando nel container come `pxtuser`, sul display della sessione grafica.
+fn in_session(script: &str) -> String {
+    let full = format!("export DISPLAY=$(ls /tmp/.X11-unix | head -1 | sed 's/X/:/'); {script}");
+    let out = std::process::Command::new("docker")
+        .args(["exec", "-u", "pxtuser", "pxt-test-rdp", "sh", "-c", &full])
+        .output()
+        .expect("docker");
+    String::from_utf8_lossy(&out.stdout).into_owned()
+}
+
+#[tokio::test]
+#[ignore = "richiede il servizio rdp di testenv (con xclip) e il motore compilato"]
+async fn text_clipboard_works_in_both_directions() {
+    use_dev_engine();
+    let fp = fingerprint().await;
+    let mut p = params(Some(fp));
+    p.keyboard_layout = 0x410;
+    let mut s = RdpSession::connect(p).await.expect("connessione");
+    let _ = drain(&mut s, Duration::from_secs(2)).await;
+    for sc in IT_PASSWORD {
+        assert!(s.send(RdpInput::Key {
+            scancode: sc,
+            pressed: true
+        }));
+        assert!(s.send(RdpInput::Key {
+            scancode: sc,
+            pressed: false
+        }));
+    }
+    assert!(s.send(RdpInput::Key {
+        scancode: 0x1C,
+        pressed: true
+    }));
+    assert!(s.send(RdpInput::Key {
+        scancode: 0x1C,
+        pressed: false
+    }));
+    // Il desktop e il servizio degli appunti del server ci mettono un po' a partire.
+    let _ = drain(&mut s, Duration::from_secs(14)).await;
+
+    // Computer -> server: il testo copiato qui si legge dagli appunti della sessione remota.
+    let local = "testo dal computer è ✓\nriga 2";
+    assert!(s.send_clipboard(local.to_string()));
+    let _ = drain(&mut s, Duration::from_secs(3)).await;
+    let mut remote = String::new();
+    for _ in 0..5 {
+        // Il formato di Windows usa CR+LF e xrdp li lascia così: si confronta senza.
+        remote = in_session("xclip -selection clipboard -o 2>/dev/null").replace("\r\n", "\n");
+        if remote.trim_end() == local {
+            break;
+        }
+        let _ = drain(&mut s, Duration::from_secs(1)).await;
+    }
+    assert_eq!(
+        remote.trim_end(),
+        local,
+        "il server non ha ricevuto il testo"
+    );
+
+    // Server -> computer: il testo copiato nella sessione arriva come evento.
+    in_session("printf 'dal server è ✓' | xclip -selection clipboard -i");
+    let end = Instant::now() + Duration::from_secs(8);
+    let mut got = None;
+    while Instant::now() < end && got.is_none() {
+        if let Ok(Some(RdpEvent::ClipboardText(t))) =
+            tokio::time::timeout(Duration::from_secs(1), s.events.recv()).await
+        {
+            got = Some(t);
+        }
+    }
+    assert_eq!(got.as_deref(), Some("dal server è ✓"));
+    s.close();
 }

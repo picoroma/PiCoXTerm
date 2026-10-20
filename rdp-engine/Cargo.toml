@@ -16,7 +16,7 @@ authors = ["PiCo"]
 
 [dependencies]
 pxt-rdp-proto = { path = "../crates/pxt-rdp-proto" }
-ironrdp = { version = "0.17", features = ["connector", "session", "graphics", "input"] }
+ironrdp = { version = "0.17", features = ["connector", "session", "graphics", "input", "cliprdr"] }
 ironrdp-tokio = { version = "0.10", features = ["reqwest-rustls-ring"] }
 ironrdp-pdu = "0.9"
 ironrdp-graphics = "0.9"
@@ -30,6 +30,9 @@ x509-cert = "0.2"
 sha2 = "0.10"
 
 # Copia locale con una correzione (vedi third_party/ironrdp-session/PICOXTERM-PATCH.md).
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Threading"] }
+
 [patch.crates-io]
 ironrdp-session = { path = "third_party/ironrdp-session" }
 

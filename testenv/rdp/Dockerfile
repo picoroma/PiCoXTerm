@@ -5,3 +5,7 @@
 FROM scottyhardy/docker-remote-desktop:latest
 RUN useradd --create-home --shell /bin/bash --groups sudo pxtuser \
     && echo 'pxtuser:pxtpass-1234' | chpasswd
+
+# `xclip` serve alle prove degli appunti condivisi: legge e scrive gli appunti della sessione grafica.
+RUN apt-get update && apt-get install -y --no-install-recommends xclip \
+    && rm -rf /var/lib/apt/lists/*

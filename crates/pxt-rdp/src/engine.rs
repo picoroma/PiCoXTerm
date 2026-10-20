@@ -50,6 +50,8 @@ pub struct SessionParams {
     /// Con un layout diverso da quello della tastiera, i tasti fisici producono caratteri sbagliati
     /// (su una tastiera italiana il `-` finirebbe come `/` con un server impostato sul layout US).
     pub keyboard_layout: u32,
+    /// Condivide gli appunti (solo testo) con il server.
+    pub clipboard: bool,
 }
 
 impl std::fmt::Debug for SessionParams {
@@ -142,7 +144,12 @@ impl RdpSession {
         let mut cmd = Command::new(&path);
         cmd.stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null());
+            // Con PXT_RDP_DEBUG i log del motore (mai la password) vanno al terminale di chi lo avvia.
+            .stderr(if std::env::var_os("PXT_RDP_DEBUG").is_some() {
+                Stdio::inherit()
+            } else {
+                Stdio::null()
+            });
         no_window(&mut cmd);
         let mut child = cmd
             .spawn()
@@ -197,6 +204,8 @@ impl RdpSession {
             height: params.height,
             pinned_cert: params.pinned_cert,
             keyboard_layout: params.keyboard_layout,
+            clipboard: params.clipboard,
+            parent_pid: std::process::id(),
         }));
 
         let first = tokio::time::timeout(REPLY_TIMEOUT, rx.recv()).await;
@@ -220,7 +229,7 @@ impl RdpSession {
             Ok(Some(FromEngine::Failed(f))) if f.kind == "auth" => Err(RdpError::Auth(f.message)),
             Ok(Some(FromEngine::Failed(f))) => Err(RdpError::Connect(f.message)),
             Ok(Some(FromEngine::Disconnected(r))) => Err(RdpError::Connect(r)),
-            Ok(Some(FromEngine::Update { .. })) => {
+            Ok(Some(FromEngine::Update { .. } | FromEngine::ClipboardText(_))) => {
                 Err(RdpError::Connect("risposta inattesa del motore RDP".into()))
             }
         };
@@ -239,6 +248,11 @@ impl RdpSession {
         self.handle.close();
     }
 
+    /// Rende incollabile nel server il testo appena copiato sul computer.
+    pub fn send_clipboard(&self, text: String) -> bool {
+        self.handle.send_clipboard(text)
+    }
+
     /// Separa la coda degli eventi dai comandi: gli eventi possono andare a un task che li gira alla
     /// scheda, mentre il resto dell'app tiene l'`RdpHandle` per input e chiusura.
     pub fn split(self) -> (mpsc::Receiver<RdpEvent>, RdpHandle) {
@@ -247,6 +261,11 @@ impl RdpSession {
 }
 
 impl RdpHandle {
+    /// Rende incollabile nel server il testo appena copiato sul computer.
+    pub fn send_clipboard(&self, text: String) -> bool {
+        self.to_engine.send(ToEngine::SetClipboard(text)).is_ok()
+    }
+
     /// Manda un evento di input; `false` se la sessione è già finita.
     pub fn send(&self, input: RdpInput) -> bool {
         self.to_engine.send(ToEngine::Input(input)).is_ok()
