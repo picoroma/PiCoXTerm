@@ -37,6 +37,8 @@ struct AppState {
     data_dir: PathBuf,
     known_hosts: PathBuf,
     shells: Mutex<HashMap<u64, Shell>>,
+    /// Dove va l'uscita di ogni terminale SSH: la scheda che lo mostra può cambiare (finestra staccata).
+    term_sinks: Mutex<HashMap<u64, Arc<TermSink>>>,
     /// Connessioni delle sessioni SFTP: senza shell, solo il sottosistema SFTP.
     sftp_conns: Mutex<HashMap<u64, pxt_ssh::SftpConnection>>,
     /// Sessioni VNC: il lato comandi (invio dei byte di noVNC, chiusura) di ciascuna.
@@ -75,6 +77,7 @@ impl AppState {
             known_hosts: data_dir.join("known_hosts"),
             data_dir,
             shells: Mutex::default(),
+            term_sinks: Mutex::default(),
             sftp_conns: Mutex::default(),
             rdp: Mutex::default(),
             vnc: Mutex::default(),
@@ -158,6 +161,80 @@ fn resolve_data_dir(app: &tauri::App) -> Result<PathBuf, Box<dyn std::error::Err
         pxt_core::APP_NAME
     };
     Ok(app.path().config_dir()?.join(name))
+}
+
+/// Quanto dell'uscita del terminale si tiene per riempire una scheda che subentra (finestra staccata).
+const TERM_RING_MAX: usize = 2 * 1024 * 1024;
+
+/// L'uscita di un terminale SSH: i canali della scheda che lo mostra (sostituibili) e la coda degli ultimi
+/// byte, che una scheda nuova riceve per ritrovare lo schermo e lo scrollback.
+struct TermSink {
+    inner: Mutex<TermSinkInner>,
+}
+
+struct TermSinkInner {
+    data: Channel<InvokeResponseBody>,
+    events: Channel<TermEvent>,
+    ring: std::collections::VecDeque<u8>,
+    cwd: Option<String>,
+    tracking: Option<TermEvent>,
+    closed: Option<Option<u32>>,
+}
+
+impl TermSink {
+    fn new(data: Channel<InvokeResponseBody>, events: Channel<TermEvent>) -> Self {
+        Self {
+            inner: Mutex::new(TermSinkInner {
+                data,
+                events,
+                ring: std::collections::VecDeque::new(),
+                cwd: None,
+                tracking: None,
+                closed: None,
+            }),
+        }
+    }
+
+    /// Byte dal server: si accodano e si mandano alla scheda attuale (se non c'è più, restano in coda).
+    fn data(&self, d: Vec<u8>) {
+        let mut g = self.inner.lock().unwrap();
+        g.ring.extend(d.iter().copied());
+        let over = g.ring.len().saturating_sub(TERM_RING_MAX);
+        g.ring.drain(..over);
+        let _ = g.data.send(InvokeResponseBody::Raw(d));
+    }
+
+    fn event(&self, ev: TermEvent) {
+        let mut g = self.inner.lock().unwrap();
+        match &ev {
+            TermEvent::Cwd { path } => g.cwd = Some(path.clone()),
+            TermEvent::Tracking { .. } => g.tracking = Some(ev.clone()),
+            TermEvent::Closed { exit } => g.closed = Some(*exit),
+            _ => {}
+        }
+        let _ = g.events.send(ev);
+    }
+
+    /// Passa il terminale a una scheda nuova: le manda per prime le ultime uscite e lo stato noto,
+    /// poi prende il posto di quella vecchia (tutto sotto lo stesso blocco: nessun byte perso o doppio).
+    fn attach(&self, data: Channel<InvokeResponseBody>, events: Channel<TermEvent>) {
+        let mut g = self.inner.lock().unwrap();
+        if !g.ring.is_empty() {
+            let replay: Vec<u8> = g.ring.iter().copied().collect();
+            let _ = data.send(InvokeResponseBody::Raw(replay));
+        }
+        if let Some(path) = g.cwd.clone() {
+            let _ = events.send(TermEvent::Cwd { path });
+        }
+        if let Some(t) = g.tracking.clone() {
+            let _ = events.send(t);
+        }
+        if let Some(exit) = g.closed {
+            let _ = events.send(TermEvent::Closed { exit });
+        }
+        g.data = data;
+        g.events = events;
+    }
 }
 
 /// Eventi di controllo verso la scheda (JSON). I dati del terminale viaggiano a parte, in binario.
@@ -854,22 +931,18 @@ async fn ssh_connect(
 
     let (ev_tx, mut ev_rx) = mpsc::channel::<ShellEvent>(64);
     let on_event_for_errors = on_event.clone();
+    let sink = Arc::new(TermSink::new(on_data, on_event));
+    let pump_sink = Arc::clone(&sink);
     let pump_state = Arc::clone(&state);
     let pump_ctx = ctx.clone();
     tauri::async_runtime::spawn(async move {
         while let Some(ev) = ev_rx.recv().await {
             match ev {
-                ShellEvent::Data(d) => {
-                    if on_data.send(InvokeResponseBody::Raw(d)).is_err() {
-                        break;
-                    }
-                }
-                ShellEvent::Cwd(path) => {
-                    let _ = on_event.send(TermEvent::Cwd { path });
-                }
+                ShellEvent::Data(d) => pump_sink.data(d),
+                ShellEvent::Cwd(path) => pump_sink.event(TermEvent::Cwd { path }),
                 ShellEvent::Closed(exit) => {
                     pump_state.audit(&pump_ctx, "disconnect", Outcome::Ok, None);
-                    let _ = on_event.send(TermEvent::Closed { exit });
+                    pump_sink.event(TermEvent::Closed { exit });
                     break;
                 }
             }
@@ -898,11 +971,16 @@ async fn ssh_connect(
 
     let id = state.next_id();
     state.shells.lock().unwrap().insert(id, shell.clone());
+    state
+        .term_sinks
+        .lock()
+        .unwrap()
+        .insert(id, Arc::clone(&sink));
     state.conn_ctx.lock().unwrap().insert(id, ctx.clone());
 
     // Tracciamento della directory (6.4): in automatico, salvo `followCwd` = `off` / `osc7-only`.
     let auto = dest.follow_cwd == FollowCwd::Auto;
-    let tracking_events = on_event_for_errors;
+    let tracking_events = sink;
     tauri::async_runtime::spawn(async move {
         let event = if auto {
             // Il tempo che la shell mostri il primo prompt, così la riga iniettata viene letta subito.
@@ -915,9 +993,29 @@ async fn ssh_connect(
                 message: None,
             }
         };
-        let _ = tracking_events.send(event);
+        tracking_events.event(event);
     });
     Ok(id)
+}
+
+/// Una scheda subentra a un'altra nel mostrare un terminale già aperto (finestra staccata o riagganciata):
+/// riceve le ultime uscite e lo stato, poi lo scorrere in diretta.
+#[tauri::command]
+fn ssh_attach(
+    state: Shared<'_>,
+    id: u64,
+    on_data: Channel<InvokeResponseBody>,
+    on_event: Channel<TermEvent>,
+) -> Result<(), String> {
+    let sink = state
+        .term_sinks
+        .lock()
+        .unwrap()
+        .get(&id)
+        .cloned()
+        .ok_or_else(|| "sessione inesistente".to_string())?;
+    sink.attach(on_data, on_event);
+    Ok(())
 }
 
 /// Traduce l'esito dell'attivazione del tracciamento in un evento per la UI.
@@ -3069,6 +3167,7 @@ async fn ssh_close(state: Shared<'_>, id: u64) -> Result<(), String> {
     external_edit_close_conn(&state, id);
     state.sftp.lock().await.remove(&id);
     state.conn_ctx.lock().unwrap().remove(&id);
+    state.term_sinks.lock().unwrap().remove(&id);
     let shell = state.shells.lock().unwrap().remove(&id);
     if let Some(s) = shell {
         s.close().await;
@@ -3201,6 +3300,7 @@ pub fn run() {
             ftp_connect,
             policy_get,
             ssh_write,
+            ssh_attach,
             ssh_resize,
             ssh_close,
             sftp_home,

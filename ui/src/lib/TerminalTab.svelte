@@ -8,6 +8,7 @@
   import '@xterm/xterm/css/xterm.css'
   import ConnectPrompts from './ConnectPrompts.svelte'
   import Modal from './Modal.svelte'
+  import { handoff } from './detach'
   import { t } from '../i18n'
   import { settings } from './settings.svelte'
   import { terminalThemes } from './themes'
@@ -26,6 +27,7 @@
     ui = null,
     savePassword,
     onmanagehostkeys,
+    attachConnId,
     connId = $bindable(null),
     status = $bindable('connecting'),
     cwd = $bindable(''),
@@ -46,6 +48,8 @@
     tracking?: TrackingInfo
     /** Apre la gestione delle host key salvate (impostazioni). */
     onmanagehostkeys?: () => void
+    /** Il terminale esiste già nel backend (scheda staccata o riagganciata): ci si collega e si ripristina lo schermo. */
+    attachConnId?: number
   } = $props()
 
   const PASSWORD_REQUIRED = 'password-required'
@@ -140,11 +144,8 @@
     zoom = Math.max(-6, Math.min(12, next))
   }
 
-  async function connect(password?: string) {
-    error = ''
-    status = 'connecting'
-    cwd = ''
-    tracking = { state: 'pending', shell: null, message: null }
+  /** I canali su cui il backend manda l'uscita del terminale e gli eventi di questa scheda. */
+  function channels() {
     const onData = new Channel<ArrayBuffer | number[]>()
     onData.onmessage = (buf) => term.write(new Uint8Array(buf))
     const onEvent = new Channel<TermEvent>()
@@ -162,6 +163,35 @@
         if (old !== null) void invoke('ssh_close', { id: old })
       }
     }
+    return { onData, onEvent }
+  }
+
+  /** Riprende un terminale già aperto: il backend manda prima le ultime uscite (lo schermo e lo scrollback). */
+  async function attach(id: number) {
+    error = ''
+    status = 'connecting'
+    cwd = ''
+    tracking = { state: 'pending', shell: null, message: null }
+    const { onData, onEvent } = channels()
+    try {
+      await invoke('ssh_attach', { id, onData, onEvent })
+    } catch (e) {
+      status = 'closed'
+      error = String(e)
+      return
+    }
+    connId = id
+    status = 'connected'
+    void invoke('ssh_resize', { id, cols: term.cols, rows: term.rows })
+    term.focus()
+  }
+
+  async function connect(password?: string) {
+    error = ''
+    status = 'connecting'
+    cwd = ''
+    tracking = { state: 'pending', shell: null, message: null }
+    const { onData, onEvent } = channels()
     try {
       connId = await invoke<number>('ssh_connect', {
         request: {
@@ -279,12 +309,14 @@
       setZoom(zoom + (ev.deltaY < 0 ? 1 : -1))
     }
     termEl.addEventListener('wheel', onWheel, { passive: false })
-    void connect()
+    if (attachConnId !== undefined) void attach(attachConnId)
+    else void connect()
 
     return () => {
       termEl.removeEventListener('wheel', onWheel)
       obs.disconnect()
-      if (connId !== null) void invoke('ssh_close', { id: connId })
+      // Una scheda che passa a un'altra finestra non chiude la connessione.
+      if (connId !== null && !handoff.has(connId)) void invoke('ssh_close', { id: connId })
       term.dispose()
     }
   })

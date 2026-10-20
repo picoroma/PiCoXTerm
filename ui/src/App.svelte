@@ -160,6 +160,7 @@
   function detachKind(tab: Tab): DetachedKind | null {
     if (tab.detached || tab.connId === null || tab.status !== 'connected') return null
     if (tab.kind === 'rdp') return 'rdp'
+    if (tab.kind === 'terminal') return 'ssh'
     if (tab.kind === 'sftp') {
       const p = sessionProtocol(tab.target.sessionId)
       return p === 'ftp' || p === 's3' ? p : 'sftp'
@@ -583,6 +584,7 @@
           bind:cwd={tab.cwd}
           bind:status={tab.status}
           bind:tracking={tab.tracking}
+          attachConnId={tab.attachConn ?? undefined}
           onmanagehostkeys={() => (showSettings = true)}
           savePassword={tab.target.sessionId ? passwordSaver(tab.target.sessionId) : undefined}
         />

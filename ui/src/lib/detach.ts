@@ -4,7 +4,7 @@
 import { invoke } from '@tauri-apps/api/core'
 
 /** Cosa mostra una finestra staccata (tipo = protocollo della sessione). */
-export type DetachedKind = 'sftp' | 'ftp' | 's3' | 'rdp'
+export type DetachedKind = 'ssh' | 'sftp' | 'ftp' | 's3' | 'rdp'
 
 export interface DetachedInfo {
   kind: DetachedKind

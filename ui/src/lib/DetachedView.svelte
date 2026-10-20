@@ -6,6 +6,7 @@
   import Modal from './Modal.svelte'
   import RdpTab from './RdpTab.svelte'
   import S3Pane from './S3Pane.svelte'
+  import TerminalTab from './TerminalTab.svelte'
   import TransferBar from './TransferBar.svelte'
   import { closeConnection, handoff, type DetachedInfo } from './detach'
   import { listNodes } from './api'
@@ -71,6 +72,15 @@
       {:else}
         <DualPane {connId} {showHidden} sessionName={info.title} sessionColor={color} />
       {/if}
+    {:else if info.kind === 'ssh'}
+      <TerminalTab
+        target={{ sessionId: info.sessionId ?? undefined }}
+        active={true}
+        ui={session?.ui ?? null}
+        attachConnId={info.connId}
+        bind:connId
+        bind:status
+      />
     {:else if info.kind === 'rdp'}
       <RdpTab
         target={{ sessionId: info.sessionId ?? undefined }}

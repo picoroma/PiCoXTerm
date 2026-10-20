@@ -485,6 +485,14 @@ const handlers: Record<string, (args: any) => unknown> = {
     ;(window as any).__lastWrite = new TextDecoder().decode(new Uint8Array(data))
   },
   ssh_close: () => {},
+  // Il terminale passa a una scheda nuova: il backend rimanda le ultime uscite e prende i nuovi canali.
+  ssh_attach: ({ id, onData, onEvent }) => {
+    ;(window as any).__sshAttached = id
+    eventChannels.set(id, onEvent)
+    dataChannels.set(id, onData)
+    emit(onData, Array.from(new TextEncoder().encode('replayed-screen\r\n')))
+    emit(onEvent, { type: 'cwd', path: '/home/u/projects' })
+  },
   ssh_inject_cwd: () => {},
   known_hosts_list: () => [
     { host: '127.0.0.1', port: 2222, keyType: 'ssh-ed25519', fingerprint: 'SHA256:abcdefghijklmnopqrstuvwxyz0123456789ABCDEFG' },
