@@ -31,16 +31,21 @@ tested once end to end with a development certificate (`winapp cert generate`,
    placeholders waiting for them.
 7. First submission review and any back-and-forth with Microsoft's certification team.
 
+## Verified 2026-10-21, installed and trusted on this machine
+
+- The MSIX launches (`PiCoDev.PiCoXTerm_mzb3h6p4gck8g!PiCoXterm`), window opens and responds.
+- **No file system virtualization to work around**: a `runFullTrust` packaged app gets normal,
+  non-virtualized access. `sessions.json`, `settings.json`, `known_hosts` and the audit log all
+  landed in the same real `%APPDATA%\PiCoXterm` the portable build already used — same data, same
+  place, nothing to change in the code.
+- `picoxterm-rdp.exe` is staged correctly beside `picoxterm.exe` inside the package.
+- Not yet verified: the keyring (Windows Credential Manager) from inside the package, an actual SSH
+  connection, and the RDP engine actually launching end-to-end — worth a real pass before relying on
+  this for anything but packaging.
+
 ## What I'll do next
 
-1. **Verify every path PiCoXterm writes to** (`sessions.json`, `settings.json`, `known_hosts`, the
-   audit log, the keyring) actually works once the MSIX is installed and trusted — this needs you
-   to run the two commands above first, then I can drive the installed app and check.
-2. **Package `picoxterm-rdp.exe` correctly**: it's staged next to `picoxterm.exe` inside the MSIX
-   (not its own `Application` entry — it's a child process, never launched from Start) and
-   `pxt_rdp::engine_path()` looks for it beside the running exe, read-only, which should work as-is
-   under MSIX; still needs the real installed-app check to be sure.
-3. **arm64 build**: today's `build-msix.ps1` only packages the architecture it's built on (x64).
+1. **arm64 build**: today's `build-msix.ps1` only packages the architecture it's built on (x64).
    Producing an arm64 package too (and a `.msixbundle` combining both, which is what the Store
    actually wants, via `winapp pack x64-folder arm64-folder`) needs a build on, or cross-compiled
    for, arm64 — not done yet.
