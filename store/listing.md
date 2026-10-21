@@ -83,8 +83,7 @@ before submission (e.g. GitHub Pages, or a raw GitHub link). See requirements.md
 
 ## Support contact / website
 
-**[placeholder]** — an email address or page Microsoft can show as the support contact. Project
-page: https://github.com/picoroma/PiCoXTerm
+**picodev@cocco.biz**. Project page: https://github.com/picoroma/PiCoXTerm
 
 ## Screenshots
 

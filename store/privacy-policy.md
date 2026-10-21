@@ -77,4 +77,4 @@ the same place. Significant changes will also be noted in the app's changelog.
 
 ## Contact
 
-Questions about this policy: **[support contact — to confirm]**.
+Questions about this policy: **picodev@cocco.biz**.
