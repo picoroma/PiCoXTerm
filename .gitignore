@@ -5,3 +5,7 @@ src-tauri/gen
 *.log
 testenv/keys/
 /rdp-engine/target
+msix/dist
+msix/devcert.pfx
+msix/*.msix
+msix/winapp.yaml

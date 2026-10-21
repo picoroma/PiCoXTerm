@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="utf-8"?>
+
+<Package
+  xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+  xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+  xmlns:uap2="http://schemas.microsoft.com/appx/manifest/uap/windows10/2"
+  xmlns:uap3="http://schemas.microsoft.com/appx/manifest/uap/windows10/3"
+  xmlns:uap10="http://schemas.microsoft.com/appx/manifest/uap/windows10/10"
+  xmlns:desktop="http://schemas.microsoft.com/appx/manifest/desktop/windows10"
+  xmlns:desktop6="http://schemas.microsoft.com/appx/manifest/desktop/windows10/6"
+  xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
+  IgnorableNamespaces="uap uap2 uap3 uap10 desktop desktop6 rescap">
+
+  <!--
+    Identity Name/Publisher: come riservati in Microsoft Partner Center (2026-10-21). Non si cambiano
+    senza riservare un nome nuovo. Version: Major.Minor.Build.Revision, numerica; Revision segue il
+    numero di beta (0.1.0-beta.4 -> 0.1.0.4). Va incrementata a ogni pacchetto pubblicato (D-40).
+  -->
+  <Identity
+    Name="PiCoDev.PiCoXTerm"
+    Publisher="CN=47CF9EDF-34F1-4B44-8BB0-606DED1FE4C3"
+    Version="0.1.0.4" />
+
+  <Properties>
+    <DisplayName>PiCoXterm</DisplayName>
+    <PublisherDisplayName>PiCoDev</PublisherDisplayName>
+    <Logo>Assets\StoreLogo.png</Logo>
+    <uap10:PackageIntegrity>
+      <uap10:Content Enforcement="on"/>
+    </uap10:PackageIntegrity>
+  </Properties>
+
+  <Dependencies>
+    <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.19041.0" MaxVersionTested="10.0.26200.0" />
+  </Dependencies>
+
+  <Resources>
+    <Resource Language="en-us"/>
+  </Resources>
+
+  <Applications>
+    <!--
+      Executable: il nome dell'eseguibile così com'è staged nella cartella pacchettizzata (non il
+      segnaposto standard che userebbe un progetto MSBuild: qui lo stage lo fa scripts/build-msix.ps1).
+      picoxterm-rdp.exe viaggia nello stesso pacchetto ma non ha una sua voce Application: è avviato
+      dall'app principale come processo figlio, non dall'utente da Start.
+    -->
+    <Application Id="PiCoXterm"
+      Executable="picoxterm.exe"
+      EntryPoint="Windows.FullTrustApplication">
+      <uap:VisualElements
+        DisplayName="PiCoXterm"
+        Description="A light, fast, portable remote access client: SSH, SFTP, FTP, S3, RDP, VNC."
+        BackgroundColor="transparent"
+        Square150x150Logo="Assets\MedTile.png"
+        Square44x44Logo="Assets\AppList.png">
+        <uap:DefaultTile Wide310x150Logo="Assets\WideTile.png" />
+      </uap:VisualElements>
+    </Application>
+  </Applications>
+
+  <Capabilities>
+    <!--
+      runFullTrust: necessaria per un'app Win32 impacchettata (Tauri/WebView2), non è una capacità
+      "ristretta" che richiede giustificazione in fase di certificazione. PiCoXterm non usa nessun'altra
+      capacità MSIX: niente file system broad access, niente networking ristretto (le connessioni SSH/
+      FTP/S3/RDP/VNC sono socket in uscita ordinarie, già permesse a un'app runFullTrust), niente
+      webcam/microfono/posizione. Verificato contro src-tauri/capabilities/default.json (2026-10-21):
+      solo clipboard-manager (testo) e dialog (apri/salva file), nessuna delle quali è una capacità
+      MSIX a parte.
+    -->
+    <rescap:Capability Name="runFullTrust" />
+  </Capabilities>
+</Package>
