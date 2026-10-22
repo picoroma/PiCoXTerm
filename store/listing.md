@@ -94,7 +94,8 @@ anyone else) until it's made public. See requirements.md.
 ## Screenshots
 
 Store requirements: at least 1 screenshot, PNG or JPEG, 1366×768 minimum (desktop), up to 10
-images. `promo/` already has six 1920×1080(ish) app screenshots from the LinkedIn announcement
-(new session, S3 session form, SSH terminal + SFTP, SFTP dual pane, S3 properties, S3 tags) — good
-candidates to resize/relabel for the Store once the MSIX build looks final. The original
-hero image you're preparing can double as the Store's main app image/icon artwork.
+images. Ready in [`screenshots/`](screenshots/), 1456×819 PNG, captured from the installed MSIX
+build with the new icon, against disposable demo data (not real sessions): SSH terminal with the
+SFTP panel, the S3 browser, a tab detached into its own window, and the "new session" picker.
+`promo/` still has six older screenshots from the LinkedIn announcement if more variety is wanted.
+The original hero image you're preparing can double as the Store's main app image/icon artwork.
