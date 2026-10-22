@@ -78,8 +78,14 @@ objectionable content, no ads, no in-app purchases, no user-to-user chat.
 
 ## Privacy policy URL
 
-**[placeholder]** — [privacy-policy.md](privacy-policy.md) needs to be published at a public URL
-before submission (e.g. GitHub Pages, or a raw GitHub link). See requirements.md.
+Decided 2026-10-22: stays in the repo, no separate hosting. Once the repo is public:
+
+```
+https://github.com/picoroma/PiCoXTerm/blob/main/store/privacy-policy.md
+```
+
+Not usable yet — the repo is still private, so this URL 404s for Microsoft's reviewers (and
+anyone else) until it's made public. See requirements.md.
 
 ## Support contact / website
 

@@ -9,27 +9,34 @@ tested once end to end with a development certificate (`winapp cert generate`,
 ## Only you can do these (account, money, identity)
 
 1. ~~Microsoft Partner Center developer account.~~ **Done.**
-2. ~~Reserve the app name.~~ **Done** — but check the capitalisation: Partner Center shows
-   **PiCoXTerm** (capital T), while the rest of the project (binary, `tauri.conf.json`, README,
-   GitHub) uses **PiCoXterm**. The manifest's `Identity/Name` is fixed as registered
-   (`PiCoDev.PiCoXTerm`, cannot change without reserving a new name), but `Properties/DisplayName` —
-   the name shown to users — is currently set to "PiCoXterm" to match the rest of the project. Say
-   if you'd rather match the Store's "PiCoXTerm" instead; it's a one-line change.
-3. **Trust the dev certificate once, locally, as administrator** (to actually launch the test
-   package — packaging itself doesn't need this):
-   ```powershell
-   winapp cert install msix\devcert.pfx
-   Add-AppxPackage msix\PiCoDev.PiCoXTerm_0.1.0.4_x64.msix
-   ```
-   Not needed for the Store submission itself — only to run the MSIX build on this machine.
+2. ~~Reserve the app name.~~ **Done.** Partner Center still shows "PiCoXTerm" (capital T) as the
+   reserved name, but `Properties/DisplayName` in the manifest is "PiCoXterm" (2026-10-21 decision)
+   — the `Identity/Name` itself (`PiCoDev.PiCoXTerm`) is fixed regardless, so this is cosmetic only.
+3. ~~Trust the dev certificate locally.~~ **Done**, verified the installed MSIX launches correctly.
 4. **IARC age-rating questionnaire**, filled in Partner Center under your account.
-5. **Support contact** Microsoft will display (email or page) and a **public URL for the privacy
-   policy** (`store/privacy-policy.md` is ready to publish — GitHub Pages, or just a raw link to
-   this file in the repo, both work for Microsoft). The policy also still has a
-   **[support contact — to confirm]** placeholder I didn't fill in on my own.
+5. ~~Support contact and privacy policy URL.~~ **Done**: contact is `picodev@cocco.biz` (now in
+   `store/privacy-policy.md` and `store/listing.md`); the privacy policy itself stays in the repo
+   rather than being hosted separately (2026-10-22 decision) — see "Privacy policy hosting" below.
 6. **Original hero image and tagline** — you're preparing these; `store/listing.md` has
    placeholders waiting for them.
-7. First submission review and any back-and-forth with Microsoft's certification team.
+7. **Make the repository public** before submitting — the Store listing's privacy policy URL
+   points into the repo itself (see below), so it must be reachable by Microsoft's reviewers and
+   anyone who installs the app, which a private repo isn't. Do this "at the appropriate time", at
+   your call, not automatically.
+8. First submission review and any back-and-forth with Microsoft's certification team.
+
+## Privacy policy hosting
+
+Decided 2026-10-22: no separate hosting (no GitHub Pages, no external site). The Store listing's
+privacy policy URL is the repo file itself:
+
+```
+https://github.com/picoroma/PiCoXTerm/blob/main/store/privacy-policy.md
+```
+
+This only resolves once the repository is public (item 7 above) — until then it 404s. Submitting
+the Store listing with this URL while the repo is private would fail review, so this is a hard
+prerequisite, not just a nice-to-have.
 
 ## Verified 2026-10-21, installed and trusted on this machine
 
