@@ -9,3 +9,5 @@ msix/dist
 msix/devcert.pfx
 msix/*.msix
 msix/winapp.yaml
+/release
+/promo

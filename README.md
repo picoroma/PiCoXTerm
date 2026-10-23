@@ -3,9 +3,15 @@
 A lightweight remote access client, inspired by MobaXterm but minimal and "auditable by construction".
 Windows, Linux, macOS · Tauri 2 + Rust · xterm.js terminal.
 
-Current release: **0.1.0-beta.3** (Windows only, unsigned). See the [changelog](CHANGELOG.md).
+Current release: **0.1.0-beta.4** (Windows only, unsigned). See the [changelog](CHANGELOG.md).
 
-## What it does today (M2 nearly complete)
+## Download
+
+Download the latest zip from the [releases page](https://github.com/picoroma/PiCoXTerm/releases), extract it and run `picoxterm.exe`. Keep `picoxterm-rdp.exe` next to it — it is the integrated RDP engine, a separate program; without it RDP sessions fall back to the Windows client. For portable mode (settings and sessions next to the executable instead of your user profile), create an empty `portable.flag` file next to `picoxterm.exe`.
+
+The executable is **not signed**: Windows will show a SmartScreen warning ("More info" → "Run anyway"). A Microsoft Store listing, which Microsoft signs, is in preparation.
+
+## What it does today
 
 **SSH**
 - Tabbed terminal (xterm.js): copy on select, right-click paste, multi-line paste warning, scrollback search (Ctrl+Shift+F), zoom with Ctrl+wheel
@@ -14,9 +20,11 @@ Current release: **0.1.0-beta.3** (Windows only, unsigned). See the [changelog](
 - **Host keys**: confirmation with fingerprint (accept once, accept and save, cancel); if a key changes the connection is blocked until the saved entry is removed
 - "Test connection" without opening a shell, reconnect in the same tab, Quick connect (`user@host:port`)
 
-**FTP and FTPS sessions** (explicit and implicit TLS, plain FTP only if the policy allows it; self-signed certificates need your explicit confirmation of their fingerprint) open in the same dual-pane tab.
+**SFTP, FTP/FTPS and S3** sessions (explicit/implicit TLS for FTP, plain FTP only if the policy allows it; self-signed certificates need your explicit confirmation of their fingerprint; S3 and S3-compatible services such as MinIO, with an AWS profile or access keys) open in a dual-pane tab (your computer on the left, the remote side on the right; send files with a button or by dragging).
 
-**SFTP sessions**: connect over SSH without a shell and browse the server in a tab, with a **dual-pane** view (your computer on the left, the server on the right; send files with a button or by dragging) plus the same editor and transfers as below.
+**RDP and VNC**
+- RDP sessions open **inside a tab**, with an integrated client (IronRDP): full keyboard, Ctrl+Alt+Del, fit-to-window and full screen, text clipboard, automatic remote resolution, NLA sign-in. A server certificate that cannot be verified is never accepted silently. Sessions with an RD Gateway, or set to a system client, still use Windows' own Remote Desktop
+- VNC sessions also open in a tab (noVNC); the password is kept in the system keyring and never reaches the interface code. VNC does not encrypt traffic — a warning says so
 
 **SFTP panel** (same SSH connection, no second login)
 - Follows the terminal's current directory (OSC 7, with automatic injection for bash, zsh and tcsh) and takes the terminal to a folder ("go to this folder in the terminal")
@@ -26,8 +34,16 @@ Current release: **0.1.0-beta.3** (Windows only, unsigned). See the [changelog](
 - The panel shows the name and colour of the active SSH session
 - The file panel always works as the user you logged in with: after `su` or `sudo su -` in the terminal it follows the folder you are in, but file access keeps your login user's permissions
 
+**Detach a tab into its own window**: SFTP/FTP/S3, RDP and SSH terminal tabs can move to a separate window — button, tab context menu, or drag the tab out of the bar. The live session moves as it is: no reconnection, no new login, no lost scrollback. Closing the detached window asks whether to dock it back or end the session. VNC and editor tabs cannot be detached yet.
+
+**Collapsible sidebar**: an arrow on the splitter hides the session tree and SFTP panel so the active tab gets the full window. For an SSH terminal, the SFTP panel doesn't disappear — it moves below the terminal instead.
+
+**Import sessions** from PuTTY (Windows registry, an exported `.reg` file, or `~/.putty/sessions`) and MobaXterm (`MobaXterm.ini` or `.mxtsessions`), keeping folders. You pick which sessions to bring in from a preview; they land in a new folder and nothing existing is touched. Passwords are not imported — type them at the first connection.
+
+**System tray**: mark sessions as favorites and the tray menu lists them, plus your most recently opened sessions, for a one-click launch. Closing the main window minimizes it to the tray; "Quit" in the tray menu exits for real.
+
 **Sessions and settings**
-- Tree of folders and sessions with filter, drag and drop, duplicate; "New session" dialog with protocol picker (SSH, SFTP and FTP/FTPS are available)
+- Tree of folders and sessions with filter, drag and drop, duplicate; "New session" dialog with a protocol picker (SSH, SFTP, FTP/FTPS, S3, RDP, VNC)
 - Passwords and passphrases only in the system keyring, never in the JSON file
 - Per-session appearance: theme, font, background and tab colour (handy to tell PROD, TEST and DEV apart)
 - Themes (dark, light, Solarized, Dracula), font, scrollback and copy/paste options
@@ -38,11 +54,9 @@ Current release: **0.1.0-beta.3** (Windows only, unsigned). See the [changelog](
 
 ## Planned
 
-- **M2** (rest): acceptance checks on real workloads
-- **M3**: plain SFTP sessions, FTP/FTPS and S3 with a dual-pane file browser
-- **M4**: RDP (external client) and VNC
-- **M5 and later**: MobaXterm import, signed installers, Devolutions RDM provider
-- **Backlog**: X11 forwarding and, in phases, an X server (spec section 6.7); network diagnostic tools (ping, port check, listening ports of a server over SSH, section 6.8)
+- **M5**: code signing for macOS and Linux installers, a Microsoft Store listing for Windows (in preparation — see `store/`), a security-info page in the app, full policy enforcement, non-functional requirements verified
+- **M6**: read-only Devolutions RDM provider (shared team sessions)
+- **Backlog**: X11 forwarding and, in phases, an X server (spec section 6.7); network diagnostic tools (ping, port check, listening ports of a server over SSH, section 6.8); SSH certificates; a KeePass provider
 
 Details and acceptance criteria in [docs/ROADMAP.md](docs/ROADMAP.md).
 
@@ -65,7 +79,11 @@ cd ui && npm install && npm run build   # frontend, embedded in the executable
 cd .. && cargo build --release -p picoxterm
 ```
 
-The executable is `target/release/picoxterm.exe`.
+The executable is `target/release/picoxterm.exe`. The integrated RDP client is a separate program with its own `Cargo.lock`:
+
+```
+cargo build --release --manifest-path rdp-engine/Cargo.toml
+```
 
 ```
 cargo fmt --all --check
@@ -74,7 +92,7 @@ cargo test --workspace
 cd ui && npm run check
 ```
 
-End-to-end tests (authentication, jump hosts, host keys, SFTP, transfers, editor) run against test SSH servers in Docker and are not part of CI. Instructions in [testenv/README.md](testenv/README.md).
+End-to-end tests (authentication, jump hosts, host keys, SFTP, transfers, editor, S3, VNC) run against test servers in Docker and are not part of CI. Instructions in [testenv/README.md](testenv/README.md).
 
 To try the interface in a browser, without Tauri, with a fake backend: `npm --prefix ui run dev` (development only, not part of the executable).
 
@@ -88,7 +106,7 @@ The design documents are written in Italian.
 
 ## Status
 
-M0 (technical spike) and M1 (tabbed SSH and local sessions) are complete. Current milestone: **M2** (SFTP panel that follows the directory), with the panel, transfers (parallel, resumable), file operations and editor done; "open with system program" is done too.
+M0 through M4 are complete (SSH, SFTP/FTP/S3, RDP, VNC). Current milestone: **M5**, polishing the project for a 1.0 release — code signing, the Microsoft Store listing, and the remaining non-functional requirements.
 
 ## Licence
 
