@@ -24,7 +24,7 @@
   import { closeConnection, handoff, type DetachedKind } from './lib/detach'
   import { newFolder, newSession, type SftpEntry, type TrackingInfo, type Folder, type Session, type SessionNode, type Target, type Uuid } from './lib/types'
   import type { Protocol } from './lib/protocols'
-  import { t } from './i18n'
+  import { lang, t } from './i18n'
 
   interface Tab {
     key: number
@@ -150,6 +150,7 @@
   onMount(() => {
     void reload()
     loadSettings().catch((e) => (notice = String(e)))
+    void invoke('tray_set_locale', { lang }).catch(() => {})
     // Una finestra staccata si è chiusa: riprendere la scheda o toglierla.
     const unlisten = listen<{ action: 'redock' | 'ended'; info: { label: string; connId: number } }>('detached-finished', (e) => {
       const { action, info } = e.payload
@@ -165,7 +166,15 @@
         closeTab(tab.key)
       }
     })
-    return () => void unlisten.then((f) => f())
+    // La system tray ha aperto una sessione (preferita o recente).
+    const unlistenTray = listen<string>('tray-open-session', (e) => {
+      const node = nodes.find((x) => x.id === e.payload)
+      if (node?.type === 'session') openSession(node)
+    })
+    return () => {
+      void unlisten.then((f) => f())
+      void unlistenTray.then((f) => f())
+    }
   })
 
   // ---- UNTAB: schede in finestre proprie (per ora file e RDP) ----
@@ -282,6 +291,7 @@
   }
 
   function openSession(s: Session) {
+    void invoke('session_mark_opened', { id: s.id }).catch(() => {})
     if (s.protocol === 'sftp' || s.protocol === 'ftp' || s.protocol === 's3') openSftpTab(s)
     else if (s.protocol === 'rdp') void openRdp(s)
     else if (s.protocol === 'vnc') openVncTab(s)
@@ -397,6 +407,11 @@
     await run(() => saveNode(s, password, clearPassword))
   }
 
+  /** Aggiunge/toglie dai preferiti della system tray: non tocca password né altre opzioni. */
+  async function toggleFavorite(s: Session) {
+    await run(() => saveNode({ ...s, favorite: !s.favorite }))
+  }
+
   function startNewFolder(parentId: Uuid | null) {
     folderName = ''
     folderDialog = { folder: newFolder('', parentId), isNew: true }
@@ -485,6 +500,7 @@
         onrename={startRename}
         ondelete={(n) => (deleting = n)}
         onmove={move}
+        onfavorite={toggleFavorite}
       />
       </div>
       <div class="hsplit" role="separator" aria-orientation="horizontal" aria-label={t('resize')} onpointerdown={(e) => drag(e, 'height')}></div>

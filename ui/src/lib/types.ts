@@ -73,6 +73,8 @@ export interface Session {
   vnc: { viewOnly: boolean; clipboard: boolean }
   ui: SessionUi
   notes: string
+  /** Mostrata nella system tray per l'avvio rapido. */
+  favorite: boolean
   createdAt: string
   updatedAt: string
 }
@@ -121,6 +123,7 @@ export function newSession(parentId: Uuid | null, protocol: Session['protocol'] 
     vnc: { viewOnly: false, clipboard: true },
     ui: { color: null, icon: null, tags: [], theme: null, fontFamily: null, fontSize: null, background: null },
     notes: '',
+    favorite: false,
     createdAt: now,
     updatedAt: now,
   }

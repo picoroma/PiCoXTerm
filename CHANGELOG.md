@@ -6,6 +6,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
 ## [Unreleased]
 
 ### Added
+- **System tray with quick launch**: mark sessions as favorites (★, from the tree's context menu) and the tray menu lists them, plus your 5 most recently opened sessions, one click to jump straight to any of them. Closing the main window now minimizes it to the tray instead of quitting; use "Quit" in the tray menu to actually exit.
 - **Collapsible sidebar**: an arrow on the splitter hides the session tree and SFTP panel so the active tab gets the full window. For an SSH terminal, the SFTP panel doesn't disappear — it moves below the terminal, full width, with its own remembered height.
 - **New app icon**: a network globe with a terminal prompt, in a new orange/blue palette.
 

@@ -527,6 +527,10 @@ const handlers: Record<string, (args: any) => unknown> = {
     else nodes.push(node)
     return node
   },
+  session_mark_opened: ({ id }) => {
+    ;((window as any).__recentSessions ??= []).unshift(id)
+  },
+  tray_set_locale: () => {},
   session_delete: ({ id }) => {
     const doomed = subtreeIds(nodes, id)
     nodes = nodes.filter((n) => !doomed.has(n.id))

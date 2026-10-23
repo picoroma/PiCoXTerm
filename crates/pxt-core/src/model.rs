@@ -306,6 +306,9 @@ pub struct Session {
     pub ui: UiOptions,
     #[serde(default)]
     pub notes: String,
+    /// Mostrata nella system tray per l'avvio rapido (D-43).
+    #[serde(default)]
+    pub favorite: bool,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -350,6 +353,7 @@ impl Session {
             vnc: VncOptions::default(),
             ui: UiOptions::default(),
             notes: String::new(),
+            favorite: false,
             created_at: now,
             updated_at: now,
         }

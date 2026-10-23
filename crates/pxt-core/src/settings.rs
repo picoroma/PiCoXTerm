@@ -5,8 +5,12 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 use crate::error::Result;
+
+/// Quante sessioni aperte di recente si ricordano per la system tray (D-43).
+pub const MAX_RECENT_SESSIONS: usize = 8;
 
 pub const MIN_FONT_SIZE: u8 = 8;
 pub const MAX_FONT_SIZE: u8 = 32;
@@ -36,6 +40,9 @@ pub struct Settings {
     pub right_click_paste: bool,
     /// Chiede conferma prima di incollare più righe.
     pub paste_multiline_warning: bool,
+    /// Sessioni aperte di recente (la più recente per prima), per il menu della system tray.
+    /// Non è una preferenza che si edita nella finestra impostazioni.
+    pub recent_session_ids: Vec<Uuid>,
 }
 
 impl Default for Settings {
@@ -49,11 +56,20 @@ impl Default for Settings {
             copy_on_select: true,
             right_click_paste: true,
             paste_multiline_warning: true,
+            recent_session_ids: Vec::new(),
         }
     }
 }
 
 impl Settings {
+    /// Segna una sessione come appena aperta: va in cima alla lista dei recenti, senza doppioni,
+    /// troncata a `MAX_RECENT_SESSIONS`.
+    pub fn mark_recent(&mut self, id: Uuid) {
+        self.recent_session_ids.retain(|x| *x != id);
+        self.recent_session_ids.insert(0, id);
+        self.recent_session_ids.truncate(MAX_RECENT_SESSIONS);
+    }
+
     /// Riporta i valori nei limiti accettati (un file modificato a mano non deve rompere l'app).
     pub fn sanitized(mut self) -> Self {
         self.font_size = self.font_size.clamp(MIN_FONT_SIZE, MAX_FONT_SIZE);

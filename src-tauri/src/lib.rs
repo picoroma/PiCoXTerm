@@ -62,6 +62,9 @@ struct AppState {
     conn_ctx: Mutex<HashMap<u64, AuditCtx>>,
     pending_hostkeys: Mutex<HashMap<u64, oneshot::Sender<HostKeyDecision>>>,
     next_id: AtomicU64,
+    /// Lingua per i testi della system tray (menu nativo, fuori dalla webview): 'it' o 'en'
+    /// (D-43). Il frontend la comunica all'avvio con `tray_set_locale`.
+    tray_locale: Mutex<String>,
 }
 
 impl AppState {
@@ -89,6 +92,7 @@ impl AppState {
             conn_ctx: Mutex::default(),
             pending_hostkeys: Mutex::default(),
             next_id: AtomicU64::new(0),
+            tray_locale: Mutex::new("en".into()),
         }
     }
 
@@ -376,6 +380,7 @@ async fn sessions_list(state: Shared<'_>) -> Result<Vec<SessionNode>, String> {
 #[tauri::command]
 async fn session_save(
     state: Shared<'_>,
+    app: tauri::AppHandle,
     node: SessionNode,
     password: Option<String>,
     clear_password: bool,
@@ -398,6 +403,7 @@ async fn session_save(
         }
     }
     state.sessions.save(node.clone()).await.map_err(err)?;
+    rebuild_tray(&app, &state).await;
     Ok(node)
 }
 
@@ -539,7 +545,7 @@ async fn import_apply(
 }
 
 #[tauri::command]
-async fn session_delete(state: Shared<'_>, id: Uuid) -> Result<(), String> {
+async fn session_delete(state: Shared<'_>, app: tauri::AppHandle, id: Uuid) -> Result<(), String> {
     let nodes = state.sessions.list().await.map_err(err)?;
     let doomed = subtree_ids(&nodes, id);
     let refs: Vec<CredentialRef> = nodes
@@ -554,7 +560,117 @@ async fn session_delete(state: Shared<'_>, id: Uuid) -> Result<(), String> {
     for r in refs {
         state.secrets.delete(&r).await.map_err(err)?;
     }
+    rebuild_tray(&app, &state).await;
     Ok(())
+}
+
+/// System tray: lingua dei suoi testi (menu nativo, fuori dalla i18n della webview).
+#[tauri::command]
+async fn tray_set_locale(
+    state: Shared<'_>,
+    app: tauri::AppHandle,
+    lang: String,
+) -> Result<(), String> {
+    *state.tray_locale.lock().unwrap() = if lang == "it" {
+        "it".into()
+    } else {
+        "en".into()
+    };
+    rebuild_tray(&app, &state).await;
+    Ok(())
+}
+
+/// Segna una sessione come appena aperta (scheda creata), per il menu "recenti" della tray.
+#[tauri::command]
+async fn session_mark_opened(
+    state: Shared<'_>,
+    app: tauri::AppHandle,
+    id: Uuid,
+) -> Result<(), String> {
+    let mut settings = state.settings.load().map_err(err)?;
+    settings.mark_recent(id);
+    state.settings.save(settings).map_err(err)?;
+    rebuild_tray(&app, &state).await;
+    Ok(())
+}
+
+/// Testi della system tray nelle due lingue dell'app (D-43): il menu è nativo, fuori dalla webview,
+/// quindi non passa dal catalogo i18n del frontend.
+fn tray_text(locale: &str, key: &str) -> &'static str {
+    match (locale, key) {
+        ("it", "show") => "Mostra PiCoXterm",
+        ("it", "quit") => "Esci",
+        (_, "show") => "Show PiCoXterm",
+        (_, "quit") => "Quit",
+        _ => "",
+    }
+}
+
+fn show_main_window(app: &tauri::AppHandle) {
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.show();
+        let _ = w.set_focus();
+    }
+}
+
+/// Ricostruisce il menu della system tray: preferiti, poi le sessioni aperte di recente (escluse
+/// quelle già tra i preferiti), poi "Mostra"/"Esci" (D-43). Chiamata dopo ogni cambio che la
+/// riguarda, non su un timer: non c'è nulla da tenere sincronizzato in background.
+async fn rebuild_tray(app: &tauri::AppHandle, state: &AppState) {
+    use tauri::menu::MenuBuilder;
+
+    let Some(tray) = app.tray_by_id("main") else {
+        return;
+    };
+    let Ok(nodes) = state.sessions.list().await else {
+        return;
+    };
+    let sessions: HashMap<Uuid, &Session> = nodes
+        .iter()
+        .filter_map(|n| match n {
+            SessionNode::Session(s) => Some((s.id, s.as_ref())),
+            SessionNode::Folder(_) => None,
+        })
+        .collect();
+
+    let mut favorites: Vec<&Session> = sessions.values().filter(|s| s.favorite).copied().collect();
+    favorites.sort_by(|a, b| a.name.cmp(&b.name));
+
+    let recent_ids = state
+        .settings
+        .load()
+        .map(|s| s.recent_session_ids)
+        .unwrap_or_default();
+    let recents: Vec<&Session> = recent_ids
+        .iter()
+        .filter_map(|id| sessions.get(id).copied())
+        .filter(|s| !s.favorite)
+        .take(5)
+        .collect();
+
+    let locale = state.tray_locale.lock().unwrap().clone();
+    let mut builder = MenuBuilder::new(app);
+    if !favorites.is_empty() {
+        for s in &favorites {
+            builder = builder.text(
+                format!("tray-open:{}", s.id),
+                format!("\u{2605} {}", s.name),
+            );
+        }
+        builder = builder.separator();
+    }
+    if !recents.is_empty() {
+        for s in &recents {
+            builder = builder.text(format!("tray-open:{}", s.id), &s.name);
+        }
+        builder = builder.separator();
+    }
+    builder = builder
+        .text("tray-show", tray_text(&locale, "show"))
+        .text("tray-quit", tray_text(&locale, "quit"));
+    if let Ok(menu) = builder.build() {
+        let _ = tray.set_menu(Some(menu));
+    }
 }
 
 /// Numero massimo di jump host in catena.
@@ -3326,7 +3442,7 @@ pub fn run() {
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_dialog::init())
         .on_window_event(|window, event| {
-            use tauri::{Emitter as _, Manager as _, WindowEvent};
+            use tauri::{Emitter as _, WindowEvent};
             if let WindowEvent::CloseRequested { api, .. } = event {
                 let label = window.label();
                 if label.starts_with("detached-") {
@@ -3334,15 +3450,53 @@ pub fn run() {
                     api.prevent_close();
                     let _ = window.emit("detached-close-requested", ());
                 } else if label == "main" {
-                    // Chiudendo la finestra principale finisce l'app, con le schede staccate.
-                    window.app_handle().exit(0);
+                    // La X nasconde la finestra: l'app resta nella system tray, per l'avvio rapido
+                    // (D-43). Si esce solo da "Esci" nel menu della tray.
+                    api.prevent_close();
+                    let _ = window.hide();
                 }
             }
         })
         .setup(|app| {
+            use tauri::menu::MenuBuilder;
+            use tauri::tray::TrayIconBuilder;
+            use tauri::Emitter as _;
+
             let dir = resolve_data_dir(app)?;
             external_cleanup_stale();
-            app.manage(Arc::new(AppState::new(dir)));
+            let state = Arc::new(AppState::new(dir));
+            app.manage(Arc::clone(&state));
+
+            // Menu minimo subito (si arricchisce di preferiti/recenti appena le sessioni sono lette).
+            let menu = MenuBuilder::new(app)
+                .text("tray-show", "Show PiCoXterm")
+                .text("tray-quit", "Quit")
+                .build()?;
+            let mut tray = TrayIconBuilder::with_id("main")
+                .menu(&menu)
+                .show_menu_on_left_click(true)
+                .on_menu_event(|app, event| {
+                    let id = event.id.as_ref();
+                    if id == "tray-quit" {
+                        app.exit(0);
+                    } else if id == "tray-show" {
+                        show_main_window(app);
+                    } else if let Some(sid) = id.strip_prefix("tray-open:") {
+                        if let Ok(uuid) = Uuid::parse_str(sid) {
+                            show_main_window(app);
+                            let _ = app.emit_to("main", "tray-open-session", uuid.to_string());
+                        }
+                    }
+                });
+            if let Some(icon) = app.default_window_icon() {
+                tray = tray.icon(icon.clone());
+            }
+            tray.build(app)?;
+
+            let app_handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                rebuild_tray(&app_handle, &state).await;
+            });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -3354,6 +3508,8 @@ pub fn run() {
             sessions_list,
             session_save,
             session_delete,
+            session_mark_opened,
+            tray_set_locale,
             sessions_export,
             sessions_import,
             import_scan,

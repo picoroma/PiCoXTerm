@@ -14,6 +14,7 @@
     onrename,
     ondelete,
     onmove,
+    onfavorite,
   }: {
     nodes: SessionNode[]
     onopen: (s: Session) => void
@@ -24,6 +25,8 @@
     onrename: (f: Folder) => void
     ondelete: (n: SessionNode) => void
     onmove: (id: Uuid, parentId: Uuid | null) => void
+    /** Aggiunge o toglie la sessione dai preferiti (menu della system tray). */
+    onfavorite: (s: Session) => void
   } = $props()
 
   interface Row {
@@ -236,6 +239,9 @@
           <span class="dot" style:background={node.ui.color}></span>
         {/if}
         <span class="name">{node.name}</span>
+        {#if node.type === 'session' && node.favorite}
+          <span class="star" title={t('favoriteBadge')}>★</span>
+        {/if}
         {#if node.type === 'session'}
           {#each node.ui.tags as tag (tag)}<span class="tag">{tag}</span>{/each}
         {/if}
@@ -258,6 +264,9 @@
       <button role="menuitem" onclick={() => pick(() => onopen(target))}>{t('open')}</button>
       <button role="menuitem" onclick={() => pick(() => onedit(target))}>{t('edit')}</button>
       <button role="menuitem" onclick={() => pick(() => onduplicate(target))}>{t('duplicate')}</button>
+      <button role="menuitem" onclick={() => pick(() => onfavorite(target))}>
+        {target.favorite ? t('unfavorite') : t('favorite')}
+      </button>
     {/if}
     {#if target?.type === 'folder'}
       <button role="menuitem" onclick={() => pick(() => onrename(target))}>{t('rename')}</button>
@@ -344,6 +353,10 @@
   .name {
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+  .star {
+    color: var(--accent);
+    font-size: 12px;
   }
   .tag {
     font-size: 11px;
