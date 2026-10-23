@@ -1,8 +1,8 @@
 # Microsoft Store listing — draft
 
 Everything below is a draft for the Partner Center "Store listing" page. Fields marked
-**[placeholder]** need the original tagline/image or an account-specific value; everything else is
-ready to paste in, in English (Store listings are published in English first; additional
+**[placeholder]** still need the original hero image or an account-specific value; everything else
+is ready to paste in, in English (Store listings are published in English first; additional
 languages can be added later as separate listing translations).
 
 ## App name
@@ -11,13 +11,17 @@ PiCoXterm
 
 *(Subject to availability when reserved in Partner Center — see [requirements.md](requirements.md).)*
 
-## Tagline / short description (up to ~100 characters)
+## Tagline / short description
 
-**[placeholder — your original tagline goes here]**
+"All'erta, o prodi del terminale! Finora avete navigato a vista! Oggi vi coprirete di connessioni
+stabili e gloria remota!"
 
-Draft alternatives, if useful as a starting point:
+Your own phrasing (2026-10-23) — kept in Italian for both the English and the future Italian
+listing, by your choice (it doesn't translate well). Check it fits Partner Center's character
+counter for this field; trim if it doesn't.
+
+Shorter fallback, English, only if the field truly won't take the full line:
 - "A light, fast, portable remote access client — SSH, SFTP, FTP, S3, RDP, VNC."
-- "SSH, SFTP, RDP and VNC in tabs. No bloat, no listening ports."
 
 ## Description (long)
 
@@ -49,6 +53,21 @@ Draft alternatives, if useful as a starting point:
 ## Category
 
 Primary: **Developer tools** (alternative: **Productivity**)
+
+## Keywords
+
+1. SSH client
+2. SFTP client
+3. Terminal
+4. Remote desktop
+5. RDP client
+6. VNC client
+7. SysAdmin tools
+
+Kept to generic protocol/category terms, no competitor product names (MobaXterm, PuTTY, WinSCP):
+some stores reject or flag trademarked names used as keywords, even when the product itself is
+free/open-source — naming them in the description's prose (already done above) is fine, using them
+as a keyword field is the riskier spot.
 
 ## Features list (bullet points, Store "Features" field)
 
