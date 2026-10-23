@@ -1,10 +1,12 @@
 # Microsoft Store: what's missing
 
-Updated 2026-10-23. **Upload to Partner Center**: `msix/PiCoDev.PiCoXTerm_0.1.0.7_x64.msix` —
+Updated 2026-10-23. **Upload to Partner Center**: `msix/PiCoDev.PiCoXTerm_0.1.8.0_x64.msix` —
 built with `--no-sign` (the Store signs it; the `--cert devcert.pfx` builds elsewhere in this
-folder are for local test installs only, never for submission). Not tracked in git (`.gitignore`);
-rebuild with `cd msix && winapp pack dist --no-sign` after staging a fresh release build and
-bumping `Version` in `Package.appxmanifest`.
+folder are for local test installs only, never for submission). **The Revision (4th number) must
+stay 0** — Partner Center rejects any other value; the package counter lives in Build instead
+(0.1.8.0, not 0.1.0.8). Not tracked in git (`.gitignore`); rebuild with
+`cd msix && winapp pack dist --no-sign` after staging a fresh release build and bumping `Version`
+in `Package.appxmanifest`.
 
 Account open, app name reserved (identity: `PiCoDev.PiCoXTerm`, publisher
 `CN=47CF9EDF-34F1-4B44-8BB0-606DED1FE4C3`, display name "PiCoXTerm"). `msix/Package.appxmanifest`

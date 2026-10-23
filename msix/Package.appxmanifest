@@ -13,13 +13,15 @@
 
   <!--
     Identity Name/Publisher: come riservati in Microsoft Partner Center (2026-10-21). Non si cambiano
-    senza riservare un nome nuovo. Version: Major.Minor.Build.Revision, numerica; Revision segue il
-    numero di beta (0.1.0-beta.4 -> 0.1.0.4). Va incrementata a ogni pacchetto pubblicato (D-40).
+    senza riservare un nome nuovo. Version: Major.Minor.Build.Revision, numerica; lo Store rifiuta
+    un pacchetto con Revision diversa da zero, quindi il contatore di pacchetto sta nel campo Build
+    (es. 0.1.7.0), non nella Revision come nei primi tentativi (D-40, corretto 2026-10-23 dopo un
+    rifiuto di Partner Center). Major.Minor seguono la versione dell'app (0.1.0-beta.4 -> 0.1.x.0).
   -->
   <Identity
     Name="PiCoDev.PiCoXTerm"
     Publisher="CN=47CF9EDF-34F1-4B44-8BB0-606DED1FE4C3"
-    Version="0.1.0.7" />
+    Version="0.1.8.0" />
 
   <Properties>
     <DisplayName>PiCoXterm</DisplayName>
