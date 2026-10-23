@@ -96,23 +96,36 @@
   }
   let sidebarWidth = $state(load('pxt.sidebarWidth', 330))
   let sftpHeight = $state(load('pxt.sftpHeight', 300))
+  /** Altezza del pannello SFTP quando è sotto il terminale (barra laterale collassata): un valore a
+      parte, perché lì è orizzontale sotto una scheda, non verticale accanto all'albero. */
+  let sftpBottomHeight = $state(load('pxt.sftpBottomHeight', 240))
   let wide = $state(false)
+  /** Barra laterale (albero + pannello SFTP) nascosta, per dare tutto lo spazio alla scheda attiva. */
+  let collapsed = $state(load('pxt.sidebarCollapsed', 0) === 1)
   const NORMAL_WIDTH_MIN = 220
   const effectiveWidth = $derived(wide ? Math.min(Math.round(window.innerWidth * 0.6), 900) : sidebarWidth)
 
+  function toggleCollapsed() {
+    collapsed = !collapsed
+    store('pxt.sidebarCollapsed', collapsed ? 1 : 0)
+  }
+
   /** Trascinamento di un divisore con il puntatore. */
-  function drag(e: PointerEvent, kind: 'width' | 'height') {
+  function drag(e: PointerEvent, kind: 'width' | 'height' | 'bottomHeight') {
     e.preventDefault()
     const startX = e.clientX
     const startY = e.clientY
     const startW = sidebarWidth
     const startH = sftpHeight
+    const startBH = sftpBottomHeight
     const move = (ev: PointerEvent) => {
       if (kind === 'width') {
         wide = false
         sidebarWidth = Math.max(NORMAL_WIDTH_MIN, Math.min(700, startW + ev.clientX - startX))
-      } else {
+      } else if (kind === 'height') {
         sftpHeight = Math.max(140, Math.min(window.innerHeight - 220, startH - (ev.clientY - startY)))
+      } else {
+        sftpBottomHeight = Math.max(140, Math.min(window.innerHeight - 220, startBH - (ev.clientY - startY)))
       }
     }
     const up = () => {
@@ -120,6 +133,7 @@
       window.removeEventListener('pointerup', up)
       store('pxt.sidebarWidth', sidebarWidth)
       store('pxt.sftpHeight', sftpHeight)
+      store('pxt.sftpBottomHeight', sftpBottomHeight)
     }
     window.addEventListener('pointermove', move)
     window.addEventListener('pointerup', up)
@@ -457,39 +471,51 @@
   }}
 />
 
-<main style:grid-template-columns="{effectiveWidth}px 5px 1fr">
-  <aside>
-    <div class="tree">
-    <SessionTree
-      {nodes}
-      onopen={openSession}
-      onedit={(s) => (editing = { session: $state.snapshot(s) as Session, isNew: false })}
-      onduplicate={(s) => run(() => duplicateSession(s.id, t('copySuffix')))}
-      onnewsession={startNewSession}
-      onnewfolder={startNewFolder}
-      onrename={startRename}
-      ondelete={(n) => (deleting = n)}
-      onmove={move}
-    />
-    </div>
-    <div class="hsplit" role="separator" aria-orientation="horizontal" aria-label={t('resize')} onpointerdown={(e) => drag(e, 'height')}></div>
-    <div class="sftp" style:height="{sftpHeight}px">
-      <SftpPanel
-        connId={panelTab?.status === 'connected' ? panelTab.connId : null}
-        cwd={panelTab?.cwd ?? ''}
-        liveIds={liveConnIds}
-        tracking={panelTab?.tracking ?? { state: 'pending', shell: null, message: null }}
-        onenabletracking={enableTracking}
-        onedit={openEditor}
-        onexternal={openWithSystem}
-        sessionName={panelTab?.title ?? ''}
-        sessionColor={sessionUi(panelTab?.target.sessionId)?.color ?? null}
-        {wide}
-        onwiden={() => (wide = !wide)}
+<main style:grid-template-columns="{collapsed ? 0 : effectiveWidth}px 5px 1fr">
+  {#if !collapsed}
+    <aside>
+      <div class="tree">
+      <SessionTree
+        {nodes}
+        onopen={openSession}
+        onedit={(s) => (editing = { session: $state.snapshot(s) as Session, isNew: false })}
+        onduplicate={(s) => run(() => duplicateSession(s.id, t('copySuffix')))}
+        onnewsession={startNewSession}
+        onnewfolder={startNewFolder}
+        onrename={startRename}
+        ondelete={(n) => (deleting = n)}
+        onmove={move}
       />
-    </div>
-  </aside>
-  <div class="vsplit" role="separator" aria-orientation="vertical" aria-label={t('resize')} onpointerdown={(e) => drag(e, 'width')}></div>
+      </div>
+      <div class="hsplit" role="separator" aria-orientation="horizontal" aria-label={t('resize')} onpointerdown={(e) => drag(e, 'height')}></div>
+      <div class="sftp" style:height="{sftpHeight}px">
+        <SftpPanel
+          connId={panelTab?.status === 'connected' ? panelTab.connId : null}
+          cwd={panelTab?.cwd ?? ''}
+          liveIds={liveConnIds}
+          tracking={panelTab?.tracking ?? { state: 'pending', shell: null, message: null }}
+          onenabletracking={enableTracking}
+          onedit={openEditor}
+          onexternal={openWithSystem}
+          sessionName={panelTab?.title ?? ''}
+          sessionColor={sessionUi(panelTab?.target.sessionId)?.color ?? null}
+          {wide}
+          onwiden={() => (wide = !wide)}
+        />
+      </div>
+    </aside>
+  {/if}
+  <div class="vsplit" role="separator" aria-orientation="vertical" aria-label={t('resize')} onpointerdown={(e) => !collapsed && drag(e, 'width')}>
+    <button
+      type="button"
+      class="collapse-toggle"
+      title={collapsed ? t('expandSidebar') : t('collapseSidebar')}
+      aria-label={collapsed ? t('expandSidebar') : t('collapseSidebar')}
+      onclick={toggleCollapsed}
+    >
+      <Icon name={collapsed ? 'arrow-right' : 'arrow-left'} size={12} />
+    </button>
+  </div>
 
   <section class="content">
     <div class="topbar">
@@ -594,6 +620,22 @@
         <p class="welcome">{t('welcome')}</p>
       {/if}
     </div>
+    {#if collapsed && panelTab?.kind === 'terminal'}
+      <div class="hsplit" role="separator" aria-orientation="horizontal" aria-label={t('resize')} onpointerdown={(e) => drag(e, 'bottomHeight')}></div>
+      <div class="sftp-bottom" style:height="{sftpBottomHeight}px">
+        <SftpPanel
+          connId={panelTab.status === 'connected' ? panelTab.connId : null}
+          cwd={panelTab.cwd}
+          liveIds={liveConnIds}
+          tracking={panelTab.tracking}
+          onenabletracking={enableTracking}
+          onedit={openEditor}
+          onexternal={openWithSystem}
+          sessionName={panelTab.title}
+          sessionColor={sessionUi(panelTab.target.sessionId)?.color ?? null}
+        />
+      </div>
+    {/if}
     <ExternalEditBar />
     <TransferBar />
   </section>
@@ -673,6 +715,7 @@
     height: 100vh;
   }
   aside {
+    grid-column: 1;
     background: var(--bg-elev);
     min-height: 0;
     display: flex;
@@ -695,6 +738,8 @@
     background: var(--border);
   }
   .vsplit {
+    grid-column: 2;
+    position: relative;
     cursor: col-resize;
     background: var(--border);
   }
@@ -702,7 +747,36 @@
   .vsplit:hover {
     background: var(--accent);
   }
+  .sftp-bottom {
+    flex: none;
+    min-height: 140px;
+    overflow: hidden;
+  }
+  /* Freccetta per collassare/espandere la barra laterale: sempre lì, sul divisore. */
+  .collapse-toggle {
+    position: absolute;
+    top: 50%;
+    left: 0;
+    transform: translateY(-50%);
+    width: 18px;
+    height: 36px;
+    padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--bg-elev);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--fg-dim);
+    cursor: pointer;
+    opacity: 0.6;
+  }
+  .collapse-toggle:hover {
+    opacity: 1;
+    color: var(--fg);
+  }
   .content {
+    grid-column: 3;
     display: flex;
     flex-direction: column;
     min-width: 0;

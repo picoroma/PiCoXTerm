@@ -5,6 +5,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
 
 ## [Unreleased]
 
+### Added
+- **Collapsible sidebar**: an arrow on the splitter hides the session tree and SFTP panel so the active tab gets the full window. For an SSH terminal, the SFTP panel doesn't disappear — it moves below the terminal, full width, with its own remembered height.
+- **New app icon**: a network globe with a terminal prompt, in a new orange/blue palette.
+
 ## [0.1.0-beta.4] - 2026-10-20
 
 ### Added
