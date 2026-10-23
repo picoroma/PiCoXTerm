@@ -56,12 +56,17 @@ prerequisite, not just a nice-to-have.
    Producing an arm64 package too (and a `.msixbundle` combining both, which is what the Store
    actually wants, via `winapp pack x64-folder arm64-folder`) needs a build on, or cross-compiled
    for, arm64 — not done yet.
-4. **CI**: no MSIX packaging step in `.github/workflows/ci.yml` yet; add one once the manual flow
+2. **CI**: no MSIX packaging step in `.github/workflows/ci.yml` yet; add one once the manual flow
    is proven stable (and decide whether it packages on every push or only on a release tag).
-5. Resize/relabel the existing `promo/` screenshots for the Store's size requirements once a
-   trusted, installed MSIX build exists to screenshot from.
-6. Bump the manifest `Version` (`msix/Package.appxmanifest`) on every future beta, same place the
+3. Bump the manifest `Version` (`msix/Package.appxmanifest`) on every future beta, same place the
    `Cargo.toml`/`tauri.conf.json` version already gets bumped.
+
+## Done since the above
+
+- **Icon**: finalized (network globe + terminal prompt, orange/blue), resized once for taskbar
+  legibility, shipped in the app and the MSIX package (D-41).
+- **Screenshots**: four real ones in [`screenshots/`](screenshots/) (1456×819 PNG), captured from
+  the installed MSIX with disposable demo data — not the older `promo/` set.
 
 ## Already true, nothing to add
 
