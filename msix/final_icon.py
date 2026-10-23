@@ -35,7 +35,7 @@ ImageDraw.Draw(mask).rounded_rectangle([0, 0, W - 1, W - 1], radius=200, fill=25
 img.paste(grad, (0, 0), mask)
 
 d = ImageDraw.Draw(img, "RGBA")
-cx, cy, r = 512, 512, 300
+cx, cy, r = 512, 512, 345
 
 # Rete di nodi e linee attorno al globo (dietro), sottili.
 rng = random.Random(3)
@@ -63,13 +63,13 @@ glass = Image.alpha_composite(glass, glow)
 img = Image.alpha_composite(img, glass)
 d = ImageDraw.Draw(img, "RGBA")
 
-# Meridiani/paralleli del globo.
-d.line([(cx, cy - r), (cx, cy + r)], fill=(*CREAM, 150), width=4)
-d.line([(cx - r, cy), (cx + r, cy)], fill=(*CREAM, 150), width=4)
+# Meridiani/paralleli del globo (più tenui: il prompt al centro deve restare la figura dominante).
+d.line([(cx, cy - r), (cx, cy + r)], fill=(*CREAM, 85), width=4)
+d.line([(cx - r, cy), (cx + r, cy)], fill=(*CREAM, 85), width=4)
 for frac in (0.45, 0.8):
     rw = r * frac
-    d.ellipse([cx - rw, cy - r, cx + rw, cy + r], outline=(*CREAM, 110), width=3)
-d.arc([cx - r, cy - r * 0.55, cx + r, cy + r * 0.55], 0, 360, fill=(*CREAM, 110), width=3)
+    d.ellipse([cx - rw, cy - r, cx + rw, cy + r], outline=(*CREAM, 60), width=3)
+d.arc([cx - r, cy - r * 0.55, cx + r, cy + r * 0.55], 0, 360, fill=(*CREAM, 60), width=3)
 
 # Nodi piccoli sulle intersezioni del reticolo (decorativi, pochi, grandi abbastanza da reggere il
 # ridimensionamento).
@@ -78,15 +78,18 @@ for ang in (40, 140, 220, 320):
     px, py = cx + r * 0.6 * math.cos(rad), cy + r * 0.42 * math.sin(rad)
     d.ellipse([px - 7, py - 7, px + 7, py + 7], fill=(*CREAM, 200))
 
-# Il prompt '>_' al centro: la forma che deve restare leggibile anche piccolissima.
+# Il prompt '>_' al centro, grande: è l'unica forma che deve restare leggibile nella barra delle
+# applicazioni (16-32px), quindi occupa gran parte del globo.
+chevron = [(cx - 172, cy - 175), (cx + 50, cy), (cx - 172, cy + 175)]
+cursor_box = [cx + 82, cy + 110, cx + 315, cy + 188]
 glow2 = Image.new("RGBA", (W, W), (0, 0, 0, 0))
 dg2 = ImageDraw.Draw(glow2)
-dg2.line([(cx - 95, cy - 90), (cx + 15, cy), (cx - 95, cy + 90)], fill=CREAM, width=70, joint="curve")
-glow2 = glow2.filter(ImageFilter.GaussianBlur(28))
+dg2.line(chevron, fill=CREAM, width=106, joint="curve")
+glow2 = glow2.filter(ImageFilter.GaussianBlur(32))
 img = Image.alpha_composite(img, glow2)
 d = ImageDraw.Draw(img, "RGBA")
-d.line([(cx - 95, cy - 90), (cx + 15, cy), (cx - 95, cy + 90)], fill=(255, 255, 255, 255), width=46, joint="curve")
-d.rounded_rectangle([cx + 40, cy + 62, cx + 190, cy + 108], radius=22, fill=(255, 255, 255, 255))
+d.line(chevron, fill=(255, 255, 255, 255), width=74, joint="curve")
+d.rounded_rectangle(cursor_box, radius=34, fill=(255, 255, 255, 255))
 
 img.save("icon_master_1024.png")
 img.resize((256, 256), Image.LANCZOS).save("icon_master_preview.png")

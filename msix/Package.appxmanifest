@@ -19,7 +19,7 @@
   <Identity
     Name="PiCoDev.PiCoXTerm"
     Publisher="CN=47CF9EDF-34F1-4B44-8BB0-606DED1FE4C3"
-    Version="0.1.0.5" />
+    Version="0.1.0.6" />
 
   <Properties>
     <DisplayName>PiCoXterm</DisplayName>
