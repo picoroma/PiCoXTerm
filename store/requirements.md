@@ -8,6 +8,30 @@ stay 0** — Partner Center rejects any other value; the package counter lives i
 `cd msix && winapp pack dist --no-sign` after staging a fresh release build and bumping `Version`
 in `Package.appxmanifest`.
 
+**Restricted capability justification** (`runFullTrust` — Partner Center asks for this on every
+submission that declares it, contrary to what an earlier note here assumed): same text each time,
+reuse it.
+
+> PiCoXterm is a desktop remote-access client (SSH/SFTP, FTP/FTPS, S3, RDP, VNC) for IT
+> administrators and developers. It is built with Tauri, a native Win32 application using the
+> system WebView2 runtime — not a UWP app — so it requires `runFullTrust` to run as a classic
+> desktop application packaged via the Desktop Bridge.
+>
+> Full trust is needed to:
+> - Open outbound network connections to the servers the user configures (SSH, FTP, RDP, VNC, S3)
+>   — the app opens no listening ports and runs no local server.
+> - Read and write its own configuration files (session list, settings) in the user's AppData
+>   folder.
+> - Store and retrieve credentials via the Windows Credential Manager (passwords are never written
+>   to disk in plain text).
+> - Launch a companion process included in the same package (`picoxterm-rdp.exe`) that implements
+>   the RDP protocol.
+> - Access the local file system when the user explicitly browses, uploads or downloads files
+>   through an SFTP/FTP/S3 session they configured themselves.
+>
+> The app accesses only what the user explicitly configures or requests. No telemetry, no
+> background services, no administrator/elevated privileges are used.
+
 Account open, app name reserved (identity: `PiCoDev.PiCoXTerm`, publisher
 `CN=47CF9EDF-34F1-4B44-8BB0-606DED1FE4C3`, display name "PiCoXTerm"). `msix/Package.appxmanifest`
 is written with real icons, and `scripts/build-msix.ps1` builds and packages a local x64 MSIX —

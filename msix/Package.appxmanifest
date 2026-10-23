@@ -63,8 +63,10 @@
 
   <Capabilities>
     <!--
-      runFullTrust: necessaria per un'app Win32 impacchettata (Tauri/WebView2), non è una capacità
-      "ristretta" che richiede giustificazione in fase di certificazione. PiCoXterm non usa nessun'altra
+      runFullTrust: necessaria per un'app Win32 impacchettata (Tauri/WebView2). **Partner Center la
+      tratta come capacità ristretta**: al primo invio chiede una motivazione testuale (corretto
+      2026-10-23 — qui si dava per scontato il contrario); il testo usato è in store/requirements.md.
+      PiCoXterm non usa nessun'altra
       capacità MSIX: niente file system broad access, niente networking ristretto (le connessioni SSH/
       FTP/S3/RDP/VNC sono socket in uscita ordinarie, già permesse a un'app runFullTrust), niente
       webcam/microfono/posizione. Verificato contro src-tauri/capabilities/default.json (2026-10-21):
