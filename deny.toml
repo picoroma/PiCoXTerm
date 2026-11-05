@@ -19,6 +19,7 @@ ignore = [
     { id = "RUSTSEC-2026-0371", reason = "zbus_names non più mantenuto (annuncio z-galaxy/zbus#2043). Solo su Linux: client del Secret Service (keyring) per le password; non è una vulnerabilità. Rischio accettato (D-27): da rivedere quando keyring passa a una versione che lo sostituisce" },
     { id = "RUSTSEC-2026-0372", reason = "zvariant_derive non più mantenuto (annuncio z-galaxy/zbus#2043). Solo su Linux: client del Secret Service (keyring) per le password; non è una vulnerabilità. Rischio accettato (D-27): da rivedere quando keyring passa a una versione che lo sostituisce" },
     { id = "RUSTSEC-2024-0370", reason = "proc-macro-error non mantenuto: dipendenza di compilazione della catena GTK/Tauri su Linux, non presente nell'eseguibile" },
+    { id = "RUSTSEC-2026-0441", reason = "pin-utils non più mantenuto (nessuna versione corretta: il consiglio è sostituire le sue macro con core::pin::pin!, non è una vulnerabilità). Arriva transitivamente dall'AWS SDK (aws-smithy-http) per le sessioni S3; da rivedere quando l'SDK smette di dipenderne" },
 ]
 
 [licenses]
