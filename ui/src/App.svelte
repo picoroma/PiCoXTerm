@@ -248,6 +248,26 @@
     activeKey = tab.key
   }
 
+  /** Duplica una scheda: nuova connessione identica (stessa sessione o stesso quick connect). */
+  function duplicateTab(src: Tab) {
+    if (src.kind === 'editor') return
+    const tab: Tab = {
+      key: nextKey++,
+      kind: src.kind,
+      title: src.title,
+      target: { ...src.target },
+      connId: null,
+      cwd: '',
+      status: 'connecting',
+      tracking: { state: src.kind === 'terminal' ? 'pending' : 'off', shell: null, message: null },
+      editPath: '',
+      dirty: false,
+    }
+    const i = tabs.findIndex((x) => x.key === src.key)
+    tabs.splice(i + 1, 0, tab)
+    activeKey = tab.key
+  }
+
   /** Apre un file remoto nell'editor integrato (se è già aperto porta in primo piano la sua scheda). */
   function openEditor(connId: number, entry: SftpEntry) {
     const same = tabs.find((x) => x.kind === 'editor' && x.connId === connId && x.editPath === entry.path)
@@ -661,8 +681,9 @@
   {@const target = tabMenu.tab}
   <div class="tab-menu-backdrop" role="presentation" onclick={() => (tabMenu = null)} oncontextmenu={(e) => { e.preventDefault(); tabMenu = null }}></div>
   <div class="tab-menu" role="menu" use:placeMenu={{ x: tabMenu.x, y: tabMenu.y }}>
-    <button role="menuitem" disabled={!detachKind(target)} onclick={() => { tabMenu = null; void detach(target) }}>{t('detachTab')}</button>
-    <button role="menuitem" onclick={() => { tabMenu = null; requestClose(target.key) }}>{t('closeTab')}</button>
+    <button role="menuitem" disabled={target.kind === 'editor'} onclick={() => { const tb = target; tabMenu = null; duplicateTab(tb) }}>{t('duplicateTab')}</button>
+    <button role="menuitem" disabled={!detachKind(target)} onclick={() => { const tb = target; tabMenu = null; void detach(tb) }}>{t('detachTab')}</button>
+    <button role="menuitem" onclick={() => { const tb = target; tabMenu = null; requestClose(tb.key) }}>{t('closeTab')}</button>
   </div>
 {/if}
 

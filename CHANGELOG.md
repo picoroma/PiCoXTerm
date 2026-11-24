@@ -5,6 +5,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
 
 ## [Unreleased]
 
+## [0.1.0-beta.6] - 2026-11-24
+
+### Added
+- **Single instance**: launching PiCoXterm again (for example from the taskbar icon) no longer opens a second copy or a second tray icon; the window that is already running is brought to the front, even if it was hidden in the tray. No network port is involved.
+- **Duplicate tab**: right-click a tab and choose "Duplicate tab (new connection)" to open a new, independent connection identical to it (same saved session or same quick connect). Not available for editor tabs.
+
+### Fixed
+- The tab context menu entries are now robust when clicked (the action read the tab after the menu had been closed).
+
 ## [0.1.0-beta.5] - 2026-11-05
 
 ### Added

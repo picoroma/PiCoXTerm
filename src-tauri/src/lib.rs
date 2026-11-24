@@ -3439,6 +3439,12 @@ fn known_hosts_remove(state: Shared<'_>, host: String, port: u16) -> Result<usiz
 
 pub fn run() {
     tauri::Builder::default()
+        // Istanza unica (D-46): deve essere il primo plugin. Un secondo avvio termina subito e
+        // porta in primo piano la finestra principale già aperta (anche se nascosta nella tray).
+        // Su Windows usa un mutex con nome e un messaggio di finestra: nessuna porta di rete.
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            show_main_window(app);
+        }))
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_dialog::init())
         .on_window_event(|window, event| {
